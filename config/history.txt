@@ -1,0 +1,225 @@
+git config --list
+git config --global user.email "dashensheji@foxmail.com"
+git config --global user.email "dashensheji@foxmail.com"
+git config --global user.name "程序设计源码"
+C盘垃圾清理.cmd
+C盘垃圾清理.cmd
+dir
+dir
+C盘垃圾清理.cmd
+dir
+dur
+dir
+dir
+ls
+dir
+ipconfig /all
+curl -4 ifconfig.me
+curl -4 ifconfig.me
+curl -4 ifconfig.me
+taskkill /IM 直播伴侣.exe /F
+Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object @{N='ProcessName';E={$_.ProcessName+'.exe'}},Id,@{N='Memory(MB)';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize
+ls
+ls
+dir
+openclaw gateway restart
+openclaw gateway start
+docker --version
+ollama --version
+ollama --version
+git clone --progress https://github.com/mcu-coder/stm32_smart_home2.git
+dir
+openclaw status
+openclaw gateway start
+openclaw --version
+dir
+javac -version
+dir
+openclaw --version
+dir
+ls
+dir
+dir
+ls
+dir
+Get-Process
+Get-Process
+dir
+dir
+dir
+dir
+ping
+ping
+pings
+dir
+dir
+dir
+ls
+dir
+dir
+dir
+dir
+dir
+dir
+dir
+键[82,] 长度=199 光标=199
+键[] 长度=161 光标=161
+dir
+dir
+dir
+dir
+dir
+ir
+ls
+dir
+cls\
+systeminfo
+dir
+dir
+dir
+dir
+dir
+dir
+ir
+dir
+clear
+cls
+cls
+dir
+cls
+cls
+clear
+cls
+cls
+cls
+ls
+ls
+dir
+openclaw --version
+ls
+pwd
+pwd
+ls
+dir
+openclaw gateway start
+Get-CimInstance Win32_Process -Filter "name='node.exe'" | Select-Object ProcessId,CommandLine
+taskkill /IM qq.exe /F
+Get-Process | Sort-Object WS -Descending | Select-Object -First 15
+Get-Process | Sort-Object CPU -Descending | Select-Object -First 15
+taskkill /IM node.exe /F
+taskkill /IM node.exe /F
+taskkill /IM node.exe /F
+taskkill /IM node.exe /F
+tree /F
+where node
+where adb
+where java
+where java
+where git
+Get-Command node
+Get-Location
+openclaw --version
+dir
+openclaw --version
+dir
+dir
+dir
+openclaw status
+ping www.baidu.com
+tasklist
+whoami
+hostname
+hostname
+hostname
+hostname
+winver
+dir
+dir
+ping www.baidu.com
+ls
+dir
+dir
+git clone --progress https://github.com/mcu-coder/stm32_Intelligent_MedicineBox.git
+ls
+dir
+ls
+openclaw status
+openclaw status
+systeminfo
+docker --version
+dir
+ollama --version
+ollama ps
+ollama --version
+dir
+ping www.baidu.com
+ls
+ls
+ls
+dir
+ls
+dir
+dir
+dir
+dir
+ls
+dir
+ls
+ls
+dir
+dir
+java -version
+netstat -ano
+dir
+ls
+ls
+ping www.baidu.com
+ls
+dir
+ping www.baidu.com
+ls
+dir
+dir
+ping www.baidu.com
+dir
+dir
+dir
+dir
+dir
+ls
+dir
+dir
+dir
+ls
+dir
+dir
+dir
+whoami
+whoami
+dir
+dir
+dir
+dir
+whoami
+dir
+C:
+cd C:
+dir
+dir
+dir
+dir
+dir
+dir
+ls
+dir
+pwd
+pwd
+netstat -ano
+dir
+whoami
+java -version
+git --version
+openclaw status
+winver
+whoami
+dir
