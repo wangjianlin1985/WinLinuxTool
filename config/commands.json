@@ -16,229 +16,499 @@
   },
   "categories": [
     {
-      "name": "进程 / 程序",
-      "desc": "查进程、查命令行来源、结束进程（排查 QQGuild.exe / node.exe / ollama.exe 谁启动的）",
+      "name": "Git仓库管理",
+      "desc": "Git 环境与仓库状态（注意：本工具不会自动提交，push 请自己确认）",
       "commands": [
         {
-          "name": "进程列表名称排序",
-          "cmd": "Get-Process | Sort-Object ProcessName | Select-Object @{N='ProcessName';E={$_.ProcessName+'.exe'}},Id,@{N='Memory(MB)';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize",
+          "name": "创建ssh密钥",
+          "cmd": "ssh-keygen -t rsa -C \"My-SSH\"",
           "params": "",
-          "desc": "PowerShell 进程列表；示例：Get-Process node",
-          "shell": "powershell",
+          "desc": "D:\\Software\\Git\\usr\\bin里面运行命令，公私钥在C:\\Users\\Administrator\\.ssh",
+          "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "进程名称内存排序",
-          "cmd": "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object @{N='ProcessName';E={$_.ProcessName+'.exe'}},Id,@{N='Memory(MB)';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize",
+          "name": "git 版本",
+          "cmd": "git --version",
+          "params": "",
+          "desc": "显示 Git 版本",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "git 位置",
+          "cmd": "where git",
+          "params": "",
+          "desc": "查 git.exe 路径",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看全部配置",
+          "cmd": "git config --list",
           "params": "",
           "desc": "",
-          "shell": "powershell",
+          "shell": "cmd",
           "danger": false,
           "stream": false
         },
         {
-          "name": "进程关联文件路径",
-          "cmd": "Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CommandLine",
+          "name": "不转换换行符",
+          "cmd": "git config --global core.autocrlf false",
           "params": "",
-          "desc": "看进程的完整启动命令行，排查到底是谁拉起来的",
-          "shell": "powershell",
+          "desc": "Git 不自动转换 Windows 的 CRLF 和 Linux 的 LF。 参数保存在路径C:\\ Users\\ [用户名] \\ .gitconfig",
+          "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "按进程名称查路径",
-          "cmd": "Get-CimInstance Win32_Process -Filter \"Name='vmnat.exe'\" | Select-Object ProcessId,Name,ExecutablePath,CommandLine",
+          "name": "忽略权限变化",
+          "cmd": "git config --global core.filemode false",
           "params": "",
-          "desc": "只查 node.exe 的启动参数；换名字即可查其他进程",
-          "shell": "powershell",
+          "desc": "不关心 Linux 文件权限变化，主要在 Linux/macOS 比较有意义。 参数保存在路径C:\\ Users\\ [用户名] \\ .gitconfig",
+          "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "文件夹路径查进程",
-          "cmd": "handle C:\\Users\\Administrator\\Desktop\\CommandTool2",
+          "name": "拒绝换行符转换",
+          "cmd": "git config --global core.safecrlf true",
+          "params": "",
+          "desc": "当 Git 进行换行符转换时，如果发现转换可能导致换行信息丢失，就直接拒绝操作。",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "git全局用户名",
+          "cmd": "git config --global user.name \"xxx源码\"",
+          "params": "",
+          "desc": "把你 Git 的全局提交用户名设置为\"程序设计源码\"",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "git全局邮箱",
+          "cmd": "git config --global user.email \"xxxxx@126.com\"",
+          "params": "",
+          "desc": "设置 Git 的全局提交邮箱：",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "----------------",
+          "cmd": "-------------------------------------",
           "params": "",
           "desc": "",
-          "shell": "powershell",
+          "shell": "",
           "danger": false,
           "stream": false
         },
         {
-          "name": "Kill进程按名称",
-          "cmd": "taskkill /IM",
-          "params": "node.exe /F",
-          "desc": "强制结束同名进程；示例：taskkill /IM node.exe /F",
-          "shell": "cmd",
-          "danger": true,
-          "stream": true
-        },
-        {
-          "name": "Kill进程按PID",
-          "cmd": "taskkill /PID",
-          "params": "1234 /F",
-          "desc": "强制结束指定 PID；示例：taskkill /PID 1234 /F",
-          "shell": "cmd",
-          "danger": true,
-          "stream": true
-        },
-        {
-          "name": "进程列表",
-          "cmd": "tasklist",
+          "name": "git初始化",
+          "cmd": "git init",
           "params": "",
-          "desc": "列出所有进程和 PID、内存占用",
+          "desc": "",
           "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "进程+服务",
-          "cmd": "tasklist /svc",
+          "name": "git提交变化暂存",
+          "cmd": "git add .",
           "params": "",
-          "desc": "列出进程及其承载的服务",
+          "desc": "",
           "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "按 CPU 排序(PS)",
-          "cmd": "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15",
+          "name": "git提交文件版本",
+          "cmd": "git commit -m \"version 1\"",
           "params": "",
-          "desc": "CPU 时间倒序前 15 个，找卡顿元凶",
-          "shell": "powershell",
+          "desc": "",
+          "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "按内存排序(PS)",
-          "cmd": "Get-Process | Sort-Object WS -Descending | Select-Object -First 15",
+          "name": "git添加远程仓库",
+          "cmd": "git remote add origin 仓库git地址",
           "params": "",
-          "desc": "内存占用倒序前 15 个",
-          "shell": "powershell",
+          "desc": "",
+          "shell": "",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "推送到master分支",
+          "cmd": "git push -u origin master",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "结束进程(PS)",
-          "cmd": "Stop-Process -Name",
-          "params": "node -Force",
-          "desc": "结束进程；示例：Stop-Process -Name node -Force",
-          "shell": "powershell",
-          "danger": true,
+          "name": "--------------",
+          "cmd": "-------------------------",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "git 创建新分支",
+          "cmd": "git checkout --orphan d4m1t",
+          "params": "",
+          "desc": "",
+          "shell": "",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "git提交变化暂存",
+          "cmd": "git add .",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
           "stream": true
         },
         {
-          "name": "进程树(PS)",
-          "cmd": "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | Sort-Object ParentProcessId",
+          "name": "git提交文件版本",
+          "cmd": "git commit -m \"version 1\"",
           "params": "",
-          "desc": "看父子进程关系，谁启动了谁一目了然",
-          "shell": "powershell",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "git 删除master分支",
+          "cmd": "git branch -D master",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "当前重命名分支",
+          "cmd": "git branch -m master",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "强推推送master",
+          "cmd": "git push -f origin master",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "------------",
+          "cmd": "-------------------------------",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "仓库状态",
+          "cmd": "git status",
+          "params": "-s",
+          "desc": "查看改动；-s 精简输出",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看Git版本历史",
+          "cmd": "git log --pretty=oneline --abbrev-commit --all --graph --decorate",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看当前所在分支",
+          "cmd": "git branch --show-current",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查Git操作记录",
+          "cmd": "git reflog",
+          "params": "",
+          "desc": "可用于找回误 reset、误删除等情况下的历史提交。",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "强制回退版本",
+          "cmd": "git reset --hard commitID",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看本地远程分支",
+          "cmd": "git branch",
+          "params": "-a",
+          "desc": "列出本地分支；-a 连远程分支",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看分支跟踪关系",
+          "cmd": "git branch -vv",
+          "params": "",
+          "desc": "查看本地分支、对应远程分支及领先/落后状态",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "创建新分支",
+          "cmd": "git switch 分支名",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "切换分支",
+          "cmd": "git switch 分支名",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "创建并切换分支",
+          "cmd": "git switch -c 分支名",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "合并分支",
+          "cmd": "git merge 分支名",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "删除已合并分支",
+          "cmd": "git branch -d 分支名",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "远程仓库",
+          "cmd": "git remote -v",
+          "params": "",
+          "desc": "显示远程地址",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "最近提交",
+          "cmd": "git log --oneline -10",
+          "params": "--graph",
+          "desc": "看最近 10 条提交；--graph 显示分支图",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "拉取不合并",
+          "cmd": "git fetch",
+          "params": "--all --prune",
+          "desc": "--all 是获取所有远程仓库，--prune 是删除远程已经不存在的本地远程跟踪引用",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看远程多的提交",
+          "cmd": "git log master..origin/master --oneline",
+          "params": "",
+          "desc": "查看远程 origin/master 有、但本地 master 没有的提交。",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "拉取并合并",
+          "cmd": "git pull",
+          "params": "--rebase=false",
+          "desc": "拉取远程并合并到当前分支",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看未暂存改动统计",
+          "cmd": "git diff",
+          "params": "--stat",
+          "desc": "统计未暂存代码修改，显示修改文件及新增、删除行数。",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看已暂存改动统计",
+          "cmd": "git diff --cached --stat",
+          "params": "",
+          "desc": "查看暂存区已暂存修改的文件及新增、删除行数",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "检查文件忽略规则",
+          "cmd": "git check-ignore -v",
+          "params": "dist/app.js",
+          "desc": "查看文件是否被Git忽略，并显示匹配的忽略规则及所在位置",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "撤销最近一次提交",
+          "cmd": "git reset --soft HEAD~1",
+          "params": "",
+          "desc": "撤销最近一次 commit，但不丢代码，让你重新整理这次提交",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "取消某文件暂存",
+          "cmd": "git restore --staged bank.txt",
+          "params": "",
+          "desc": "把指定文件取消暂存，但不删除文件，只是把它从“准备提交”区域拿出来",
+          "shell": "cmd",
           "danger": false,
           "stream": true
         }
       ]
     },
     {
-      "name": "服务",
-      "desc": "查看/启停 Windows 服务（OpenClaw Gateway 之类）",
+      "name": "系统信息",
+      "desc": "查看 Windows 版本、主机名、当前用户、环境变量等基础信息",
       "commands": [
         {
+          "name": "系统详细信息",
+          "cmd": "systeminfo",
+          "params": "",
+          "desc": "列出 Windows 详细配置与补丁。首次执行较慢（1~3 分钟），耐心等",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "Windows 版本",
+          "cmd": "winver",
+          "params": "",
+          "desc": "弹窗显示 Windows 版本与内部版本号（GUI 窗口）",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "计算机名",
+          "cmd": "hostname",
+          "params": "",
+          "desc": "显示本机计算机名，例如 WIN-43BV8B9FMJT",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "当前用户",
+          "cmd": "whoami",
+          "params": "",
+          "desc": "显示当前登录账号（域\\用户名）",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "所有环境变量",
+          "cmd": "set",
+          "params": "",
+          "desc": "列出全部环境变量（CMD 语法）",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看 PATH",
+          "cmd": "echo %PATH%",
+          "params": "",
+          "desc": "只输出 PATH，用分号分隔",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "系统信息(PS)",
+          "cmd": "Get-ComputerInfo",
+          "params": "",
+          "desc": "PowerShell 版系统信息，内容非常全，输出较慢",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "进程列表(PS)",
+          "cmd": "Get-Process",
+          "params": "",
+          "desc": "列出所有进程；可加 | Format-Table -AutoSize",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
           "name": "服务列表(PS)",
-          "cmd": "Get-Service | Sort-Object Name | Format-Table Name,DisplayName,Status -AutoSize",
+          "cmd": "Get-Service",
           "params": "",
-          "desc": "列出服务；示例：Get-Service | Where-Object Status -eq 'Running'",
+          "desc": "列出所有服务及状态；示例：Get-Service | Where-Object Status -eq Running",
           "shell": "powershell",
           "danger": false,
-          "stream": true
-        },
-        {
-          "name": "启动服务(PS)",
-          "cmd": "Start-Service",
-          "params": "-Name Spooler",
-          "desc": "启动服务；示例：Start-Service -Name Spooler",
-          "shell": "powershell",
-          "danger": true,
-          "stream": true
-        },
-        {
-          "name": "停止服务(PS)",
-          "cmd": "Stop-Service",
-          "params": "-Name VMUSBArbService",
-          "desc": "停止服务；示例：Stop-Service -Name VMUSBArbService  -Force",
-          "shell": "powershell",
-          "danger": true,
-          "stream": true
-        },
-        {
-          "name": "重启服务(PS)",
-          "cmd": "Restart-Service",
-          "params": "-Name Spooler",
-          "desc": "重启服务；示例：Restart-Service -Name Spooler",
-          "shell": "powershell",
-          "danger": true,
-          "stream": true
-        },
-        {
-          "name": "设置服务为手动启动",
-          "cmd": "Set-Service",
-          "params": "-Name VMUSBArbService -StartupType Manual",
-          "desc": "设置服务为手动启动",
-          "shell": "",
-          "danger": false,
-          "stream": false
-        },
-        {
-          "name": "************",
-          "cmd": "**********************",
-          "params": "",
-          "desc": "**********",
-          "shell": "",
-          "danger": false,
-          "stream": false
-        },
-        {
-          "name": "查询服务",
-          "cmd": "sc query",
-          "params": "服务名",
-          "desc": "查单个服务状态；示例：sc query Spooler",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "全部服务状态",
-          "cmd": "sc query type= service state= all",
-          "params": "",
-          "desc": "列出所有服务及状态（注意 type= 后必须有空格）",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "已启动服务",
-          "cmd": "net start",
-          "params": "",
-          "desc": "列出当前正在运行的服务",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "启动服务",
-          "cmd": "net start",
-          "params": "服务名",
-          "desc": "启动服务；示例：net start Spooler",
-          "shell": "cmd",
-          "danger": true,
-          "stream": true
-        },
-        {
-          "name": "停止服务",
-          "cmd": "net stop",
-          "params": "服务名",
-          "desc": "停止服务；示例：net stop Spooler",
-          "shell": "cmd",
-          "danger": true,
           "stream": true
         }
       ]
@@ -403,6 +673,243 @@
       ]
     },
     {
+      "name": "进程 / 程序",
+      "desc": "查进程、查命令行来源、结束进程（排查 QQGuild.exe / node.exe / ollama.exe 谁启动的）",
+      "commands": [
+        {
+          "name": "进程列表名称排序",
+          "cmd": "Get-Process | Sort-Object ProcessName | Select-Object @{N='ProcessName';E={$_.ProcessName+'.exe'}},Id,@{N='Memory(MB)';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize",
+          "params": "",
+          "desc": "PowerShell 进程列表；示例：Get-Process node",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "进程名称内存排序",
+          "cmd": "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object @{N='ProcessName';E={$_.ProcessName+'.exe'}},Id,@{N='Memory(MB)';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize",
+          "params": "",
+          "desc": "",
+          "shell": "powershell",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "进程关联文件路径",
+          "cmd": "Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CommandLine",
+          "params": "",
+          "desc": "看进程的完整启动命令行，排查到底是谁拉起来的",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "按进程名称查路径",
+          "cmd": "Get-CimInstance Win32_Process -Filter \"Name='vmnat.exe'\" | Select-Object ProcessId,Name,ExecutablePath,CommandLine",
+          "params": "",
+          "desc": "只查 node.exe 的启动参数；换名字即可查其他进程",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "文件夹路径查进程",
+          "cmd": "handle C:\\Users\\Administrator\\Desktop\\CommandTool2",
+          "params": "",
+          "desc": "",
+          "shell": "powershell",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "Kill进程按名称",
+          "cmd": "taskkill /IM",
+          "params": "node.exe /F",
+          "desc": "强制结束同名进程；示例：taskkill /IM node.exe /F",
+          "shell": "cmd",
+          "danger": true,
+          "stream": true
+        },
+        {
+          "name": "Kill进程按PID",
+          "cmd": "taskkill /PID",
+          "params": "1234 /F",
+          "desc": "强制结束指定 PID；示例：taskkill /PID 1234 /F",
+          "shell": "cmd",
+          "danger": true,
+          "stream": true
+        },
+        {
+          "name": "进程列表",
+          "cmd": "tasklist",
+          "params": "",
+          "desc": "列出所有进程和 PID、内存占用",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "进程+服务",
+          "cmd": "tasklist /svc",
+          "params": "",
+          "desc": "列出进程及其承载的服务",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "按 CPU 排序(PS)",
+          "cmd": "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15",
+          "params": "",
+          "desc": "CPU 时间倒序前 15 个，找卡顿元凶",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "按内存排序(PS)",
+          "cmd": "Get-Process | Sort-Object WS -Descending | Select-Object -First 15",
+          "params": "",
+          "desc": "内存占用倒序前 15 个",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "结束进程(PS)",
+          "cmd": "Stop-Process -Name",
+          "params": "node -Force",
+          "desc": "结束进程；示例：Stop-Process -Name node -Force",
+          "shell": "powershell",
+          "danger": true,
+          "stream": true
+        },
+        {
+          "name": "进程树(PS)",
+          "cmd": "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | Sort-Object ParentProcessId",
+          "params": "",
+          "desc": "看父子进程关系，谁启动了谁一目了然",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        }
+      ]
+    },
+    {
+      "name": "服务",
+      "desc": "查看/启停 Windows 服务（OpenClaw Gateway 之类）",
+      "commands": [
+        {
+          "name": "打开Win服务管理器",
+          "cmd": "services.msc",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "服务列表(PS)",
+          "cmd": "Get-Service | Sort-Object Name | Format-Table Name,DisplayName,Status -AutoSize",
+          "params": "",
+          "desc": "列出服务；示例：Get-Service | Where-Object Status -eq 'Running'",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "启动服务(PS)",
+          "cmd": "Start-Service",
+          "params": "-Name Spooler",
+          "desc": "启动服务；示例：Start-Service -Name Spooler",
+          "shell": "powershell",
+          "danger": true,
+          "stream": true
+        },
+        {
+          "name": "停止服务(PS)",
+          "cmd": "Stop-Service",
+          "params": "-Name VMUSBArbService",
+          "desc": "停止服务；示例：Stop-Service -Name VMUSBArbService  -Force",
+          "shell": "powershell",
+          "danger": true,
+          "stream": true
+        },
+        {
+          "name": "重启服务(PS)",
+          "cmd": "Restart-Service",
+          "params": "-Name Spooler",
+          "desc": "重启服务；示例：Restart-Service -Name Spooler",
+          "shell": "powershell",
+          "danger": true,
+          "stream": true
+        },
+        {
+          "name": "设置服务为手动启动",
+          "cmd": "Set-Service",
+          "params": "-Name VMUSBArbService -StartupType Manual",
+          "desc": "设置服务为手动启动",
+          "shell": "",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "************",
+          "cmd": "**********************",
+          "params": "",
+          "desc": "**********",
+          "shell": "",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "查询服务",
+          "cmd": "sc query",
+          "params": "服务名",
+          "desc": "查单个服务状态；示例：sc query Spooler",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "全部服务状态",
+          "cmd": "sc query type= service state= all",
+          "params": "",
+          "desc": "列出所有服务及状态（注意 type= 后必须有空格）",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "已启动服务",
+          "cmd": "net start",
+          "params": "",
+          "desc": "列出当前正在运行的服务",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "启动服务",
+          "cmd": "net start",
+          "params": "服务名",
+          "desc": "启动服务；示例：net start Spooler",
+          "shell": "cmd",
+          "danger": true,
+          "stream": true
+        },
+        {
+          "name": "停止服务",
+          "cmd": "net stop",
+          "params": "服务名",
+          "desc": "停止服务；示例：net stop Spooler",
+          "shell": "cmd",
+          "danger": true,
+          "stream": true
+        }
+      ]
+    },
+    {
       "name": "网络诊断",
       "desc": "IP 配置、连通性、DNS、路由、端口排查",
       "commands": [
@@ -544,94 +1051,112 @@
       ]
     },
     {
-      "name": "系统信息",
-      "desc": "查看 Windows 版本、主机名、当前用户、环境变量等基础信息",
+      "name": "开机启动 / 任务计划",
+      "desc": "排查开机自启项与计划任务（Gateway 任务丢失就查这里）",
       "commands": [
         {
-          "name": "系统详细信息",
-          "cmd": "systeminfo",
-          "params": "",
-          "desc": "列出 Windows 详细配置与补丁。首次执行较慢（1~3 分钟），耐心等",
+          "name": "计划任务明细",
+          "cmd": "schtasks /query /fo LIST",
+          "params": "/v",
+          "desc": "列出所有计划任务明细（输出很长，建议重定向到文件）",
           "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "Windows 版本",
-          "cmd": "winver",
+          "name": "计划任务表格",
+          "cmd": "schtasks /query /fo TABLE",
           "params": "",
-          "desc": "弹窗显示 Windows 版本与内部版本号（GUI 窗口）",
+          "desc": "表格形式列出计划任务，比 LIST 好看",
           "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "计算机名",
-          "cmd": "hostname",
-          "params": "",
-          "desc": "显示本机计算机名，例如 WIN-43BV8B9FMJT",
+          "name": "按名称查任务",
+          "cmd": "schtasks /query /tn",
+          "params": "\"OpenClaw Gateway\" /v /fo LIST",
+          "desc": "查指定任务；示例：schtasks /query /tn \"OpenClaw Gateway\" /v",
           "shell": "cmd",
           "danger": false,
           "stream": true
         },
         {
-          "name": "当前用户",
-          "cmd": "whoami",
-          "params": "",
-          "desc": "显示当前登录账号（域\\用户名）",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "所有环境变量",
-          "cmd": "set",
-          "params": "",
-          "desc": "列出全部环境变量（CMD 语法）",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "查看 PATH",
-          "cmd": "echo %PATH%",
-          "params": "",
-          "desc": "只输出 PATH，用分号分隔",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "系统信息(PS)",
-          "cmd": "Get-ComputerInfo",
-          "params": "",
-          "desc": "PowerShell 版系统信息，内容非常全，输出较慢",
+          "name": "计划任务(PS)",
+          "cmd": "Get-ScheduledTask",
+          "params": "| Where-Object State -ne 'Disabled'",
+          "desc": "列出未禁用的计划任务",
           "shell": "powershell",
           "danger": false,
           "stream": true
         },
         {
-          "name": "进程列表(PS)",
-          "cmd": "Get-Process",
+          "name": "任务详情(PS)",
+          "cmd": "Get-ScheduledTask -TaskName 'OpenClaw Gateway' | Select-Object -ExpandProperty Actions",
           "params": "",
-          "desc": "列出所有进程；可加 | Format-Table -AutoSize",
+          "desc": "看任务到底执行了什么命令",
           "shell": "powershell",
           "danger": false,
           "stream": true
         },
         {
-          "name": "服务列表(PS)",
-          "cmd": "Get-Service",
+          "name": "启动文件夹",
+          "cmd": "explorer shell:startup",
           "params": "",
-          "desc": "列出所有服务及状态；示例：Get-Service | Where-Object Status -eq Running",
+          "desc": "打开当前用户的启动文件夹",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "打开任务计划程序",
+          "cmd": "taskschd.msc",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "开机启动总览列表",
+          "cmd": "Get-CimInstance Win32_StartupCommand | Select-Object Name,Command,Location,User",
+          "params": "",
+          "desc": "列出注册表/启动文件夹里的自启项",
           "shell": "powershell",
           "danger": false,
           "stream": true
+        },
+        {
+          "name": "开机启动详细列表",
+          "cmd": "Get-CimInstance Win32_StartupCommand |Select-Object Name,Command,Location,User | Format-List",
+          "params": "",
+          "desc": "查询所有的开机程序",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "添加开机启动项",
+          "cmd": "Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '命令工具箱' -Value '\"C:\\Users\\Administrator\\Desktop\\CommandTool2\\CommandTool.exe\"'",
+          "params": "",
+          "desc": "添加程序到开机启动",
+          "shell": "powershell",
+          "danger": false,
+          "stream": false
+        },
+        {
+          "name": "删除开机启动项",
+          "cmd": "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '命令工具箱'",
+          "params": "",
+          "desc": "删除开机启动项",
+          "shell": "powershell",
+          "danger": false,
+          "stream": false
         }
       ]
     },
     {
-      "name": "Windows 维护",
+      "name": "Windows 维护任务管理器",
       "desc": "系统文件检查、镜像修复、电源/电池报告（多数需要管理员权限，且很慢）",
       "commands": [
         {
@@ -705,103 +1230,133 @@
           "shell": "powershell",
           "danger": false,
           "stream": true
-        }
-      ]
-    },
-    {
-      "name": "开机启动 / 任务计划",
-      "desc": "排查开机自启项与计划任务（Gateway 任务丢失就查这里）",
-      "commands": [
-        {
-          "name": "计划任务明细",
-          "cmd": "schtasks /query /fo LIST",
-          "params": "/v",
-          "desc": "列出所有计划任务明细（输出很长，建议重定向到文件）",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
         },
         {
-          "name": "计划任务表格",
-          "cmd": "schtasks /query /fo TABLE",
+          "name": "------------------",
+          "cmd": "---------------------------------------------",
           "params": "",
-          "desc": "表格形式列出计划任务，比 LIST 好看",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "按名称查任务",
-          "cmd": "schtasks /query /tn",
-          "params": "\"OpenClaw Gateway\" /v /fo LIST",
-          "desc": "查指定任务；示例：schtasks /query /tn \"OpenClaw Gateway\" /v",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "计划任务(PS)",
-          "cmd": "Get-ScheduledTask",
-          "params": "| Where-Object State -ne 'Disabled'",
-          "desc": "列出未禁用的计划任务",
-          "shell": "powershell",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "任务详情(PS)",
-          "cmd": "Get-ScheduledTask -TaskName 'OpenClaw Gateway' | Select-Object -ExpandProperty Actions",
-          "params": "",
-          "desc": "看任务到底执行了什么命令",
-          "shell": "powershell",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "启动文件夹",
-          "cmd": "explorer shell:startup",
-          "params": "",
-          "desc": "打开当前用户的启动文件夹",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "开机启动总览列表",
-          "cmd": "Get-CimInstance Win32_StartupCommand | Select-Object Name,Command,Location,User",
-          "params": "",
-          "desc": "列出注册表/启动文件夹里的自启项",
-          "shell": "powershell",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "开机启动详细列表",
-          "cmd": "Get-CimInstance Win32_StartupCommand |Select-Object Name,Command,Location,User | Format-List",
-          "params": "",
-          "desc": "查询所有的开机程序",
+          "desc": "",
           "shell": "",
           "danger": false,
           "stream": false
         },
         {
-          "name": "添加开机启动项",
-          "cmd": "Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '命令工具箱' -Value '\"C:\\Users\\Administrator\\Desktop\\CommandTool2\\CommandTool.exe\"'",
+          "name": "CPU运行状态",
+          "cmd": "$cpu=Get-CimInstance Win32_Processor;$os=Get-CimInstance Win32_OperatingSystem;$p=Get-Process;$h=(Get-Counter '\\Process(_Total)\\Handle Count' -ErrorAction SilentlyContinue).CounterSamples.CookedValue;$u=((Get-Counter '\\Processor(_Total)\\% Processor Time').CounterSamples.CookedValue);[PSCustomObject]@{利用率=([math]::Round($u,0)).ToString()+'%';速度=([math]::Round($cpu.CurrentClockSpeed/1000,2)).ToString('0.00')+' GHz';句柄=([math]::Round($h,0)).ToString();进程=$p.Count;线程=($p|ForEach-Object {$_.Threads.Count}|Measure-Object -Sum).Sum;正常运行时间=([math]::Floor(((Get-Date)-$os.LastBootUpTime).TotalDays)).ToString()+':'+(([timespan]((Get-Date)-$os.LastBootUpTime)).Hours.ToString('00'))+':'+(([timespan]((Get-Date)-$os.LastBootUpTime)).Minutes.ToString('00'))+':'+(([timespan]((Get-Date)-$os.LastBootUpTime)).Seconds.ToString('00'))}",
           "params": "",
-          "desc": "添加程序到开机启动",
+          "desc": "",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查询内存使用状态",
+          "cmd": "$os=Get-CimInstance Win32_OperatingSystem;$cs=Get-CimInstance Win32_ComputerSystem;$c=Get-Counter '\\Memory\\Committed Bytes','\\Memory\\Commit Limit','\\Memory\\Cache Bytes','\\Memory\\Pool Nonpaged Bytes','\\Memory\\Pool Paged Bytes'|Select-Object -ExpandProperty CounterSamples;$use=($cs.TotalPhysicalMemory-$os.FreePhysicalMemory*1KB);[PSCustomObject]@{总物理内存=([math]::Round($cs.TotalPhysicalMemory/1GB,1)).ToString()+' GB';使用中=([math]::Round($use/1GB,1)).ToString()+' GB';内存利用率=([math]::Round($use/$cs.TotalPhysicalMemory*100,1)).ToString()+'%';可用=([math]::Round($os.FreePhysicalMemory/1MB/1024,1)).ToString()+' GB';已压缩='需额外查询';已提交=([math]::Round(($c|Where-Object Path -like '*Committed Bytes').CookedValue/1GB,1)).ToString()+' GB';提交限制=([math]::Round(($c|Where-Object Path -like '*Commit Limit').CookedValue/1GB,1)).ToString()+' GB';已缓存='任务管理器口径';非分页缓冲池=([math]::Round(($c|Where-Object Path -like '*Pool Nonpaged Bytes').CookedValue/1MB,0)).ToString()+' MB';分页缓冲池=([math]::Round(($c|Where-Object Path -like '*Pool Paged Bytes').CookedValue/1MB,0)).ToString()+' MB'}",
+          "params": "",
+          "desc": "",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查询显卡GPU状态",
+          "cmd": "$s=nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits;$p=$s -split ',';$u=$p[0].Trim();$used=[math]::Round([double]$p[1].Trim()/1024,1);$total=[math]::Round([double]$p[2].Trim()/1024,1);$shareTotal=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB/2,1);$gpuTotal=[math]::Round($total+$shareTotal,1);[PSCustomObject]@{利用率=$u+'%';'专用 GPU 内存'=$used.ToString('0.0')+' / '+$total.ToString('0.0')+' GB';'共享 GPU 内存'='0.0 / '+$shareTotal.ToString('0.0')+' GB';'GPU 内存'=$used.ToString('0.0')+' / '+$gpuTotal.ToString('0.0')+' GB';'GPU 温度'=$p[3].Trim()+' °C'}",
+          "params": "",
+          "desc": "",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        }
+      ]
+    },
+    {
+      "name": "打印机共享",
+      "desc": "",
+      "commands": [
+        {
+          "name": "打印机查询",
+          "cmd": "Get-Printer | Format-Table Name,PortName,Shared,ShareName",
+          "params": "",
+          "desc": "打印机查询",
           "shell": "powershell",
           "danger": false,
           "stream": false
         },
         {
-          "name": "删除开机启动项",
-          "cmd": "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '命令工具箱'",
+          "name": "共享打印机",
+          "cmd": "Set-Printer -Name \"HP DJ 2700 series PCL-3 (网络)\" -Shared $true -ShareName \"HP2700\"",
           "params": "",
-          "desc": "删除开机启动项",
-          "shell": "powershell",
+          "desc": "",
+          "shell": "",
           "danger": false,
           "stream": false
         }
+      ]
+    },
+    {
+      "name": "本地服务连通测试",
+      "desc": "一键测试本机常驻服务端口是否活着",
+      "commands": [
+        {
+          "name": "OpenClaw Gateway",
+          "cmd": "curl http://127.0.0.1:18789",
+          "params": "",
+          "desc": "测试 Gateway 本地端口 18789 是否响应",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "Ollama 服务",
+          "cmd": "curl http://127.0.0.1:11434/api/tags",
+          "params": "",
+          "desc": "测试 Ollama 11434 端口",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "Gateway 端口(PS)",
+          "cmd": "Test-NetConnection 127.0.0.1 -Port 18789",
+          "params": "",
+          "desc": "PowerShell 方式测端口连通性",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "Ollama 端口(PS)",
+          "cmd": "Test-NetConnection 127.0.0.1 -Port 11434",
+          "params": "",
+          "desc": "测试 Ollama 端口",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "本机监听总览(PS)",
+          "cmd": "Get-NetTCPConnection -State Listen | Sort-Object LocalPort | Select-Object LocalAddress,LocalPort,OwningProcess",
+          "params": "",
+          "desc": "按端口排序看本机所有监听服务",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "PID 对应进程(PS)",
+          "cmd": "Get-Process -Id",
+          "params": "1234",
+          "desc": "用 PID 反查进程名；示例：Get-Process -Id 1234",
+          "shell": "powershell",
+          "danger": false,
+          "stream": true
+        }
+      ]
+    },
+    {
+      "name": "--------------------------------",
+      "desc": "",
+      "commands": [
       ]
     },
     {
@@ -910,33 +1465,63 @@
       ]
     },
     {
-      "name": "打印机共享",
-      "desc": "",
+      "name": "Node.js / npm",
+      "desc": "Node 与 npm 环境排查（OpenClaw 也跑在 Node 上）",
       "commands": [
         {
-          "name": "打印机查询",
-          "cmd": "Get-Printer | Format-Table Name,PortName,Shared,ShareName",
+          "name": "npm从淘宝镜像安装",
+          "cmd": "npm install --registry=https://registry.npm.taobao.org",
           "params": "",
-          "desc": "打印机查询",
-          "shell": "powershell",
+          "desc": "",
+          "shell": "cmd",
           "danger": false,
-          "stream": false
+          "stream": true
         },
         {
-          "name": "共享打印机",
-          "cmd": "Set-Printer -Name \"HP DJ 2700 series PCL-3 (网络)\" -Shared $true -ShareName \"HP2700\"",
+          "name": "安装cnpm",
+          "cmd": "npm install -g cnpm --registry=https://registry.npm.taobao.org",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "低版本安装cnpm",
+          "cmd": "npm install -g cnpm@7.1.1 --registry=http://registry.npm.taobao.org",
+          "params": "",
+          "desc": "如果是node12.13版本需要运行这个命令才兼容",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "取消ssl认证",
+          "cmd": "npm config set strict-ssl false",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "查看全局目录配置",
+          "cmd": "npm config ls",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "--------------",
+          "cmd": "--------------------------------",
           "params": "",
           "desc": "",
           "shell": "",
           "danger": false,
           "stream": false
-        }
-      ]
-    },
-    {
-      "name": "Node.js / npm",
-      "desc": "Node 与 npm 环境排查（OpenClaw 也跑在 Node 上）",
-      "commands": [
+        },
         {
           "name": "node 版本",
           "cmd": "node -v",
@@ -1051,6 +1636,69 @@
       "name": "Python",
       "desc": "Python / pip 环境排查",
       "commands": [
+        {
+          "name": "华为云镜像安装",
+          "cmd": "pip install -i https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "阿里云镜像安装",
+          "cmd": "pip install -i https://repo.huaweicloud.com/repository/pypi/simple -r requirements.txt",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "清华镜像安装",
+          "cmd": "pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "导出第三方依赖包",
+          "cmd": "pip freeze > requirements.txt",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "强制更新pip版本",
+          "cmd": "python -m pip install -U --force-reinstall pip -i https://mirrors.aliyun.com/pypi/simple/",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "更新pip版本",
+          "cmd": "python -m pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/",
+          "params": "",
+          "desc": "",
+          "shell": "cmd",
+          "danger": false,
+          "stream": true
+        },
+        {
+          "name": "-----------------",
+          "cmd": "-------------------------------------",
+          "params": "",
+          "desc": "",
+          "shell": "",
+          "danger": false,
+          "stream": false
+        },
         {
           "name": "python 版本",
           "cmd": "python --version",
@@ -1242,102 +1890,6 @@
           "cmd": "mvn package",
           "params": "-DskipTests",
           "desc": "打包；-DskipTests 跳过测试",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        }
-      ]
-    },
-    {
-      "name": "Git",
-      "desc": "Git 环境与仓库状态（注意：本工具不会自动提交，push 请自己确认）",
-      "commands": [
-        {
-          "name": "git 版本",
-          "cmd": "git --version",
-          "params": "",
-          "desc": "显示 Git 版本",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "git 位置",
-          "cmd": "where git",
-          "params": "",
-          "desc": "查 git.exe 路径",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "仓库状态",
-          "cmd": "git status",
-          "params": "-s",
-          "desc": "查看改动；-s 精简输出",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "分支列表",
-          "cmd": "git branch",
-          "params": "-a",
-          "desc": "列出本地分支；-a 连远程分支",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "最近提交",
-          "cmd": "git log --oneline -10",
-          "params": "--graph",
-          "desc": "看最近 10 条提交；--graph 显示分支图",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "远程仓库",
-          "cmd": "git remote -v",
-          "params": "",
-          "desc": "显示远程地址",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "查看改动",
-          "cmd": "git diff",
-          "params": "--stat",
-          "desc": "看未暂存改动；--stat 只看统计",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "拉取并合并",
-          "cmd": "git pull",
-          "params": "--rebase=false",
-          "desc": "拉取远程并合并到当前分支",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "拉取不合并",
-          "cmd": "git fetch",
-          "params": "--all --prune",
-          "desc": "只更新远程引用；--prune 清理已删分支",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "忽略文件检查",
-          "cmd": "git check-ignore -v",
-          "params": "dist/app.js",
-          "desc": "看某文件被哪条 .gitignore 规则忽略",
           "shell": "cmd",
           "danger": false,
           "stream": true
@@ -1756,67 +2308,13 @@
       ]
     },
     {
-      "name": "本地服务连通测试",
-      "desc": "一键测试本机常驻服务端口是否活着",
+      "name": "----------------------------------------",
+      "desc": "",
       "commands": [
-        {
-          "name": "OpenClaw Gateway",
-          "cmd": "curl http://127.0.0.1:18789",
-          "params": "",
-          "desc": "测试 Gateway 本地端口 18789 是否响应",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "Ollama 服务",
-          "cmd": "curl http://127.0.0.1:11434/api/tags",
-          "params": "",
-          "desc": "测试 Ollama 11434 端口",
-          "shell": "cmd",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "Gateway 端口(PS)",
-          "cmd": "Test-NetConnection 127.0.0.1 -Port 18789",
-          "params": "",
-          "desc": "PowerShell 方式测端口连通性",
-          "shell": "powershell",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "Ollama 端口(PS)",
-          "cmd": "Test-NetConnection 127.0.0.1 -Port 11434",
-          "params": "",
-          "desc": "测试 Ollama 端口",
-          "shell": "powershell",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "本机监听总览(PS)",
-          "cmd": "Get-NetTCPConnection -State Listen | Sort-Object LocalPort | Select-Object LocalAddress,LocalPort,OwningProcess",
-          "params": "",
-          "desc": "按端口排序看本机所有监听服务",
-          "shell": "powershell",
-          "danger": false,
-          "stream": true
-        },
-        {
-          "name": "PID 对应进程(PS)",
-          "cmd": "Get-Process -Id",
-          "params": "1234",
-          "desc": "用 PID 反查进程名；示例：Get-Process -Id 1234",
-          "shell": "powershell",
-          "danger": false,
-          "stream": true
-        }
       ]
     },
     {
-      "name": "磁盘 / 空间【没啥用】",
+      "name": "磁盘/空间【没啥用】",
       "desc": "查看分区、剩余空间、卷与磁盘信息",
       "commands": [
         {
@@ -1908,7 +2406,7 @@
         },
         {
           "name": "格式化磁盘",
-          "cmd": "format",
+          "cmd": "format_危险",
           "params": "D: /fs:ntfs",
           "desc": "格式化分区，数据全没，谨慎到不能再谨慎",
           "shell": "cmd",
