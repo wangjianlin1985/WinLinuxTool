@@ -84,7 +84,7 @@
         },
         {
           "name": "git全局用户名",
-          "cmd": "git config --global user.name \"xxx源码\"",
+          "cmd": "git config --global user.name \"程序设计源码\" \"计算机设计源码\" \"单片机设计源码\"",
           "params": "",
           "desc": "把你 Git 的全局提交用户名设置为\"程序设计源码\"",
           "shell": "cmd",
@@ -93,7 +93,7 @@
         },
         {
           "name": "git全局邮箱",
-          "cmd": "git config --global user.email \"xxxxx@126.com\"",
+          "cmd": "git config --global user.email \"xxxxx@qq.com\"",
           "params": "",
           "desc": "设置 Git 的全局提交邮箱：",
           "shell": "cmd",
