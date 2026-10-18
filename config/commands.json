@@ -93,7 +93,7 @@
         },
         {
           "name": "git全局邮箱",
-          "cmd": "git config --global user.email \"xxxxx@qq.com\"",
+          "cmd": "git config --global user.email \"xxx@qq.com\"",
           "params": "",
           "desc": "设置 Git 的全局提交邮箱：",
           "shell": "cmd",
