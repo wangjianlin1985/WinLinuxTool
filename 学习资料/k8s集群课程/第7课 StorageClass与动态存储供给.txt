@@ -1,0 +1,338 @@
+今天继续深入一步：StorageClass（存储类）和动态存储供给（Dynamic Provisioning）。
+这一课非常重要，因为在实际生产环境中，我们通常不希望每创建一个 PVC，就必须由管理员提前手动创建一个 PV。
+我们希望实现这样的效果：开发人员只需要创建 PVC，Kubernetes 就能自动创建对应的 PV，并把存储分配给 Pod。
+这就是动态存储供给（Dynamic Provisioning）。
+
+一、先回顾上一课：PV 和 PVC 有什么问题？
+上一课我们使用的是静态存储供给（Static Provisioning）。
+流程大致如下：
+管理员提前创建 PV
+例如：创建 5Gi 的存储卷
+	↓
+用户创建 PVC
+	↓
+申请 5Gi 存储空间
+	↓
+PVC 与 PV 绑定
+	↓
+Pod 挂载 PVC 使用存储
+
+这种方式有个问题：
+假设公司有 100 个开发人员，每个人都需要创建自己的 PVC。管理员就得提前准备大量 PV，非常麻烦。
+有没有办法让 Kubernetes 自动创建 PV？有！这就引出了 StorageClass。
+
+二、StorageClass 是什么？
+StorageClass，简称 SC，中文叫存储类。你可以把它理解为：
+StorageClass 是 Kubernetes 的存储模板，它定义了应该使用什么存储插件、如何创建存储卷，以及创建存储卷时采用什么参数。
+例如：
+- 申请 5Gi 的存储空间。
+- 使用 VMware 或云平台提供的存储。
+- 使用 NFS 网络存储。
+- 使用 Ceph 分布式存储。
+- 自动创建对应的 PV。
+StorageClass 本身并不存储数据，它只是定义存储的创建规则。
+
+它通常包含三个重要信息：
+配置		作用
+provisioner	指定动态存储供应商
+parameters	指定存储创建参数
+reclaimPolicy	指定 PVC 删除后如何处理存储
+
+三、动态存储供给的工作原理
+有了 StorageClass，整个流程就变了。动态存储供给流程
+① 用户创建 PVC
+申请 5Gi 存储空间，并指定 StorageClass
+	↓
+② Kubernetes 查找 StorageClass
+根据 PVC 中的 storageClassName 找到对应规则
+	↓
+③ Provisioner 动态创建存储
+调用对应存储系统的插件
+	↓
+④ 自动创建 PV
+并将 PV 与 PVC 自动绑定
+	↓
+⑤ Pod 挂载 PVC
+应用开始使用持久化存储
+
+这里要注意一个关键点：StorageClass 不负责真正创建磁盘，真正执行创建动作的是 Provisioner（存储供应器）。
+
+例如：
+- 云厂商的 CSI 插件可以自动创建云硬盘。
+- Ceph CSI 可以自动创建 Ceph 存储卷。
+- NFS Provisioner 可以自动创建 NFS 子目录。
+CSI 是 Container Storage Interface（容器存储接口），它是 Kubernetes 与各种存储系统之间的标准接口。
+
+四、StorageClass 的 YAML 配置
+我们先看一个 StorageClass 的配置示例：
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: my-storage
+provisioner: example.com/my-provisioner
+parameters:
+  type: fast
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+
+逐项解释：
+字段		含义
+apiVersion	StorageClass 的 API 版本
+kind		资源类型，StorageClass
+metadata.name	存储类名称
+provisioner	存储供应器名称
+parameters	存储供应器需要的参数
+reclaimPolicy	PV 回收策略
+volumeBindingMode	PV 绑定时机
+
+这里重点讲解两个字段。
+1. reclaimPolicy：回收策略
+它和上一课 PV 的回收策略是类似的。
+策略	含义
+Delete	删除 PVC 后，自动回收 PV，并尝试删除底层存储
+Retain	删除 PVC 后，保留 PV 和底层数据
+
+注意：Delete 不代表所有存储插件都一定会物理删除数据，具体取决于 Provisioner 的实现。
+
+2. volumeBindingMode：绑定模式，有两种常见配置：
+模式			含义
+Immediate		创建 PVC 后立即创建并绑定 PV
+WaitForFirstConsumer	等待 Pod 使用 PVC 后，再根据 Pod 的调度位置创建和绑定 PV
+第二种在本地存储场景尤其重要。
+
+例如：你的 Kubernetes 集群有三个节点：k8s-master  k8s-node1 k8s-node2
+如果 Pod 最终调度到了 node1，那么本地存储也应该在 node1 上创建。
+这就是 WaitForFirstConsumer 的价值。
+
+五、实际操作：在你的 Kubernetes 集群实现动态存储
+上一课我们使用的是 hostPath 静态存储，目录在 master 的 /mnt/k8s-pv。
+本次我们使用一个轻量级动态存储供应器：Local Path Provisioner。
+它由 Rancher 社区维护，可以自动在节点本地创建存储目录，并动态创建 PV。
+
+注意：这是为了学习动态供给机制的实验方案，不是生产环境的分布式共享存储。节点本地数据不会自动复制到其他节点。
+第一步：检查当前 StorageClass
+在 master 执行：kubectl get storageclass
+也可以使用简写：kubectl get sc
+查看当前 PV 和 PVC：kubectl get pv,pvc -A
+你可能会发现当前没有 StorageClass。
+这是正常的，因为 Kubernetes 默认不会自动提供一个通用的动态存储供应器。
+
+Kubernetes 有存储管理框架，但具体存储供应器需要我们自己安装。
+第二步：安装 Local Path Provisioner
+在 master 执行：kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
+
+这条命令会安装相关组件，主要包括：
+1. Namespace：local-path-storage
+2. Deployment：local-path-provisioner
+3. ServiceAccount 和 RBAC 权限
+4. StorageClass：local-path
+5. ConfigMap：存储路径及节点配置
+
+等待组件启动：kubectl get pods -n local-path-storage
+查看 StorageClass：kubectl get sc
+预期能看到类似：
+NAME         PROVISIONER
+local-path   rancher.io/local-path
+再查看详细信息：kubectl describe sc local-path
+重点观察：
+Provisioner:          rancher.io/local-path
+ReclaimPolicy:        Delete
+VolumeBindingMode:    WaitForFirstConsumer
+这就说明我们的动态存储供应器已经准备好了。
+
+第三步：创建 PVC
+现在我们不需要手动创建 PV 了！直接创建一个 PVC：
+cat > /root/dynamic-pvc.yaml <<'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dynamic-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+执行：kubectl apply -f /root/dynamic-pvc.yaml
+查看 PVC：kubectl get pvc
+这里可能会看到：
+NAME          STATUS    VOLUME   CAPACITY
+dynamic-pvc   Pending
+
+先别着急，这不是故障！还记得刚才讲的 WaitForFirstConsumer 吗？
+它需要等待一个真正使用 PVC 的 Pod 出现，才能确定应该在哪个节点创建本地存储。
+
+第四步：创建 Pod 使用 PVC，创建 Pod：
+cat > /root/dynamic-pod.yaml <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dynamic-pod
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Hello Kubernetes Dynamic Storage" > /usr/share/nginx/html/index.html
+        nginx -g 'daemon off;'
+    volumeMounts:
+    - name: web-data
+      mountPath: /usr/share/nginx/html
+  volumes:
+  - name: web-data
+    persistentVolumeClaim:
+      claimName: dynamic-pvc
+EOF
+
+执行：kubectl apply -f /root/dynamic-pod.yaml
+查看 Pod：kubectl get pod -o wide
+查看 PVC：kubectl get pvc
+查看 PV：kubectl get pv
+
+正常情况下，你会看到：
+NAME          STATUS   VOLUME                                     CAPACITY
+dynamic-pvc   Bound    pvc-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   1Gi
+这时发生了什么？
+1. 我们创建了 PVC。
+2. Pod 使用 PVC。
+3. Local Path Provisioner 根据 Pod 的调度节点创建本地存储目录。
+4. Kubernetes 自动创建 PV。
+5. PV 和 PVC 自动绑定。
+6. Pod 挂载存储成功。
+整个过程，我们没有手动创建任何 PV！
+这就是动态存储供给。
+
+第五步：验证数据持久化
+这是非常重要的实验。
+首先往挂载目录写入一份额外的数据：
+kubectl exec dynamic-pod -- sh -c \
+'echo "This is persistent data" > /usr/share/nginx/html/persist.txt'
+查看文件：kubectl exec dynamic-pod -- cat /usr/share/nginx/html/persist.txt
+然后删除 Pod：kubectl delete pod dynamic-pod
+重新创建：kubectl apply -f /root/dynamic-pod.yaml
+等待 Pod 运行：kubectl get pod dynamic-pod -w
+再检查文件：kubectl exec dynamic-pod -- cat /usr/share/nginx/html/persist.txt
+如果仍然能够看到：This is persistent data  说明数据成功保留了！
+
+这里有个重要知识点：删除 Pod 不会删除 PVC，也不会删除 PV，所以数据依然存在。
+
+第六步：观察底层存储
+查看 PV 详细信息：
+kubectl describe pv
+重点观察：
+StorageClass:  local-path
+Reclaim Policy: Delete
+Claim:         default/dynamic-pvc
+Node Affinity:
+
+再查看 Pod 被调度到了哪个节点：kubectl get pod -o wide
+Local Path Provisioner 会在对应节点上创建实际目录。
+例如，假设 Pod 被调度到 k8s-node1，实际目录可能类似：
+/opt/local-path-provisioner/pvc-xxxx_default_dynamic-pvc
+具体路径以你的 PV 信息和 Provisioner 配置为准。
+你可以登录对应节点查看：ls -l /opt/local-path-provisioner/
+这就把 Kubernetes 里面的 PV 和 Linux 宿主机上的真实目录联系起来了。
+
+六、动态存储的删除机制
+我们再做一个实验，理解 Delete 和 Retain 的区别。先查看：
+kubectl get pvc
+kubectl get pv
+
+当前应该存在：
+- PVC：dynamic-pvc
+- PV：自动创建的 pvc-xxxx
+删除 PVC【注意这里删除pvc前要先删除绑定的pod】：kubectl delete pvc dynamic-pvc 
+再查看：
+kubectl get pvc
+kubectl get pv
+
+因为这个 StorageClass 使用的是：
+reclaimPolicy: Delete
+因此动态创建的 PV 会进入删除流程，底层存储也会根据 Provisioner 的实现进行回收。
+
+注意： 删除 PVC 可能导致底层数据丢失，生产环境操作前一定要确认回收策略和数据备份。
+
+七、StorageClass、PV、PVC 三者之间的关系
+到这里，我们把这三个核心概念串起来。
+StorageClass（存储类）
+定义存储创建规则，指定 Provisioner
+	↓
+动态供给规则
+Provisioner（存储供应器）
+调用底层存储系统创建实际存储
+	↓
+PV（PersistentVolume）
+Kubernetes 自动创建的持久化存储资源
+	↓
+PVC（PersistentVolumeClaim）
+用户申请并绑定的存储空间
+	↓
+Pod
+通过 PVC 挂载并使用存储
+
+再对比一下静态和动态供给：
+对比	静态供给		动态供给
+PV 创建	管理员手动创建	Provisioner 自动创建
+PVC 创建	用户创建		用户创建
+存储分配	手动匹配		自动分配
+管理成本	较高		较低
+适用场景	固定存储资源	自动化存储管理
+
+八、再补充一个生产环境知识点：CSI
+你可能会问：Local Path Provisioner 能动态创建存储，那生产环境用什么？
+生产环境经常使用 CSI 插件。例如：
+存储方案		主要用途
+Local Path	本地磁盘实验、单机本地存储
+NFS CSI		网络共享文件存储
+Ceph CSI		分布式存储
+AWS EBS CSI	AWS 云硬盘
+Azure Disk CSI	Azure 云硬盘
+vSphere CSI	VMware 虚拟化存储
+
+理解这几个概念就够了：
+- StorageClass：定义创建规则。
+- CSI：存储接口标准。
+- CSI Driver：具体存储驱动。
+- Provisioner：负责动态创建存储资源的组件。
+注意：动态供给不等于分布式存储。 Local Path 只是自动分配节点本地目录，节点损坏时数据仍可能丢失。
+真正需要跨节点高可用，应该考虑 Ceph、云盘等具备相应能力的存储方案。
+
+九、本课常用命令总结
+命令				作用
+kubectl get sc			查看 StorageClass
+kubectl describe sc local-path	查看存储类详情
+kubectl get pv			查看所有 PV
+kubectl get pvc			查看 PVC
+kubectl describe pv			查看 PV 详细信息
+kubectl describe pvc dynamic-pvc	查看 PVC 详细信息
+kubectl get pods -n local-path-storage	查看动态存储组件
+kubectl get pod -o wide		查看 Pod 所在节点
+kubectl delete pvc dynamic-pvc	删除 PVC
+
+如果出现 PVC 一直 Pending，重点检查：
+kubectl describe pvc dynamic-pvc
+kubectl get pods -n local-path-storage
+kubectl get events --sort-by=.metadata.creationTimestamp
+特别留意 Provisioner 是否正常运行，以及 Pod 是否成功调度。
+
+本课实验完成后，可以删除自己的实验资源：
+kubectl delete -f /root/dynamic-pod.yaml
+kubectl delete -f /root/dynamic-pvc.yaml
+这不会删除上一课的 nginx-pv 和 nginx-pvc，也不会卸载 Local Path Provisioner。
+
+十、第7课知识点回顾
+今天需要真正掌握的是下面这些内容：
+- [ ] 理解 StorageClass 的作用。
+- [ ] 理解 Provisioner 的作用。
+- [ ] 理解静态供给和动态供给的区别。
+- [ ] 理解 Immediate 和 WaitForFirstConsumer。
+- [ ] 能够安装 Local Path Provisioner。
+- [ ] 能够创建动态 PVC。
+- [ ] 能够让 Kubernetes 自动创建 PV。
+- [ ] 理解 PVC 删除与底层数据回收的关系。
+- [ ] 理解 CSI 的作用。

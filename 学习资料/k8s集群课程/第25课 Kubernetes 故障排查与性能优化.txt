@@ -1,0 +1,652 @@
+这一课非常重要，属于 Kubernetes 从入门走向企业级运维的关键课程。
+前面我们已经学习了 Deployment、Service、Ingress、存储、网络策略、HPA、RBAC、Helm、Jenkins、GitOps、Istio 等内容。
+但是，真正进入企业生产环境后，最重要的能力之一不是会部署，而是：
+当 Kubernetes 集群出现故障时，你能不能快速定位问题、分析原因、恢复服务，并找到性能瓶颈。
+本节课我们直接使用你已经搭建好的三节点 Kubernetes 集群进行实战。
+
+一、本节课学习目标
+学完本课，你需要掌握以下内容：
+序号	学习内容			掌握目标
+1	Kubernetes 故障排查流程	建立系统化排错思路
+2	Pod 故障排查		解决 Pending、CrashLoopBackOff 等
+3	Deployment 故障排查	解决副本数异常、更新失败
+4	Service 网络排查		解决服务无法访问
+5	DNS 故障排查		解决集群内部域名解析失败
+6	节点故障排查		解决 NotReady、资源不足
+7	存储故障排查		解决 PVC Pending、挂载失败
+8	CPU、内存性能分析		找出资源瓶颈
+9	网络性能排查		分析网络连接问题
+10	综合故障实战		独立排查并恢复故障服务
+
+
+二、Kubernetes 故障排查的基本思路
+假设企业生产环境中，Java 微服务突然无法访问。
+你不能一上来就重启 Kubernetes，也不能直接删除 Pod。
+
+正确的排查顺序应该是：Kubernetes 故障排查流程
+第一步：检查集群节点
+kubectl get nodes
+	↓
+第二步：检查 Pod 状态
+kubectl get pods -A -o wide
+	↓
+第三步：检查 Pod 事件和日志
+kubectl describe pod
+kubectl logs
+	↓
+第四步：检查网络和存储
+Service、EndpointSlice、DNS、PVC
+	↓
+第五步：定位根因并恢复服务
+修复配置、资源、网络或存储问题
+
+记住一个原则：
+先检查状态，再检查事件，然后查看日志，最后分析配置和底层环境。
+
+三、常用故障排查命令
+这些命令建议全部加入你的 WinLinuxTool Linux 命令库。
+1. 查看集群节点状态
+kubectl get nodes -o wide
+查看节点详细信息：kubectl describe node k8s-node1
+查看所有命名空间的 Pod：kubectl get pods -A -o wide
+查看所有资源：kubectl get all -A
+查看集群组件状态：kubectl get pods -n kube-system
+注意：kubectl get all -A 并不代表集群中的所有资源类型，它只显示常见资源。
+
+2. 查看 Pod 详细信息
+kubectl describe pod nginx-pod
+查看 Pod 日志：kubectl logs nginx-pod
+查看上一次崩溃的容器日志：kubectl logs nginx-pod --previous
+实时跟踪日志：kubectl logs -f nginx-pod
+查看指定容器日志：kubectl logs nginx-pod -c nginx
+查看 Pod 所在节点：kubectl get pod nginx-pod -o wide
+查看 Pod YAML：kubectl get pod nginx-pod -o yaml
+
+3. 查看 Kubernetes 事件
+kubectl get events -A
+按照时间排序：kubectl get events -A --sort-by='.lastTimestamp'
+查看最近发生的事件：kubectl get events -A --sort-by='.metadata.creationTimestamp'
+这里特别重要。
+例如你看到：
+FailedScheduling
+FailedMount
+BackOff
+FailedCreatePodSandBox
+Unhealthy
+OOMKilled
+这些信息通常能够帮助我们快速缩小故障范围。
+
+四、Pod 常见故障及解决方法
+这是 Kubernetes 运维中最常见的故障类型。
+先记住下面这些状态：
+Pod 状态		含义		常见原因
+Pending		等待调度		资源不足、节点选择限制、PVC 未绑定
+ContainerCreating	容器创建中	镜像下载、存储挂载问题
+ImagePullBackOff	镜像拉取失败	镜像地址错误、网络问题
+ErrImagePull	镜像拉取错误	镜像不存在、认证失败
+CrashLoopBackOff	容器反复崩溃	程序错误、启动命令错误
+Error		容器执行失败	程序退出码异常
+OOMKilled	内存超限被杀	容器内存不足
+CreateContainerConfigError	容器配置错误	Secret、ConfigMap 不存在
+
+实战1：模拟 ImagePullBackOff 故障
+我们故意创建一个不存在的镜像，让 Kubernetes 出现故障。
+创建 YAML：vi /root/bad-image.yaml
+写入：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-image
+spec:
+  containers:
+  - name: nginx
+    image: nginx:999999
+
+创建 Pod：kubectl apply -f /root/bad-image.yaml
+查看状态：kubectl get pods
+可能看到：
+NAME        READY   STATUS             RESTARTS
+bad-image   0/1     ErrImagePull        0
+稍后可能变成：
+bad-image   0/1     ImagePullBackOff    0
+排查：kubectl describe pod bad-image
+
+重点看最后的 Events：Failed to pull image
+原因：镜像不存在或无法从镜像仓库下载。
+修复：kubectl delete pod bad-image
+修改镜像为正确版本：image: nginx:1.27
+重新创建：kubectl apply -f /root/bad-image.yaml
+验证：kubectl get pods
+本次掌握
+ 能够通过 Pod Events 定位镜像拉取失败问题。
+
+实战2：模拟 CrashLoopBackOff 故障
+创建：vi /root/crash-pod.yaml
+内容：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: crash-pod
+spec:
+  containers:
+  - name: crash
+    image: busybox:1.36
+    command: ["/bin/sh", "-c", "echo 程序启动; sleep 5; exit 1"]
+
+创建：kubectl apply -f /root/crash-pod.yaml
+查看：kubectl get pods
+容器运行5秒后主动退出，Kubernetes 会不断重启它。
+查看日志：kubectl logs crash-pod
+查看上一次容器的日志：kubectl logs crash-pod --previous
+查看退出原因：kubectl describe pod crash-pod
+重点关注：
+- Last State
+- Exit Code
+- Restart Count
+- Events
+这里需要理解一个知识点：
+CrashLoopBackOff 并不是故障根因，而是 Kubernetes 发现容器反复退出后，逐渐延长重启间隔的一种退避机制。
+实际生产中，可能是 Java 程序配置错误、数据库连接失败、启动参数错误等原因导致。
+清理：kubectl delete pod crash-pod
+
+实战3：模拟 OOMKilled 内存溢出
+这是企业环境非常重要的故障。
+创建：vi /root/oom-pod.yaml
+内容：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oom-pod
+spec:
+  containers:
+  - name: memory
+    image: polinux/stress
+    resources:
+      limits:
+        memory: "50Mi"
+    command:
+    - stress
+    - "--vm"
+    - "1"
+    - "--vm-bytes"
+    - "100M"
+    - "--vm-hang"
+    - "0"
+
+创建：kubectl apply -f /root/oom-pod.yaml
+查看：kubectl get pods
+查看详细信息：kubectl describe pod oom-pod
+可能看到：
+Reason: OOMKilled
+Exit Code: 137
+
+解释：
+- OOMKilled：容器因为内存超限被系统终止。
+- 137：通常表示进程收到了 SIGKILL（128+9）。
+解决思路：
+1. 检查程序是否存在内存泄漏。
+2. 分析 JVM 堆内存配置。
+3. 适当增加容器 memory limits。
+4. 根据实际负载调整 requests 和 limits。
+清理：kubectl delete pod oom-pod
+注意：这是故意制造内存故障的实验，只在你的测试集群执行，不要在生产集群运行。
+
+五、Deployment 故障排查
+Deployment 负责管理 ReplicaSet 和 Pod。
+例如：
+Deployment
+    |
+    v
+ReplicaSet
+    |
+    +---- Pod 1
+    |
+    +---- Pod 2
+    |
+    +---- Pod 3
+
+如果 Deployment 期望运行3个副本，但是实际只有1个，就需要排查。
+1. 查看 Deployment 状态
+kubectl get deployment
+查看详细信息：kubectl describe deployment nginx-deployment
+查看 ReplicaSet：kubectl get rs
+查看 Pod：kubectl get pods -o wide
+
+2. 查看 Deployment 更新状态
+kubectl rollout status deployment/nginx-deployment
+查看更新历史：kubectl rollout history deployment/nginx-deployment
+回滚到上一个版本：kubectl rollout undo deployment/nginx-deployment
+查看回滚结果：kubectl rollout status deployment/nginx-deployment
+
+3. 查看 Deployment 是否存在副本异常
+kubectl get deployment nginx-deployment
+例如：
+NAME               READY   UP-TO-DATE   AVAILABLE
+nginx-deployment   1/3     3            1
+说明：
+- 期望副本：3
+- 最新副本：3
+- 可用副本：1
+可能是另外两个 Pod 没有正常启动。
+
+继续：kubectl get pods -o wide
+然后针对异常 Pod 执行：kubectl describe pod Pod名称
+记住：Deployment 出现副本异常，不要只检查 Deployment，还要继续向下检查 ReplicaSet 和 Pod。
+
+六、Service 网络故障排查
+这一部分结合你之前做过的 NodePort 实验。
+你之前已经成功通过 Windows 浏览器访问：192.168.79.130:30080
+现在我们学习：如果这个地址突然无法访问，应该怎么办？
+1. 检查 Service
+kubectl get svc -A
+查看指定 Service：kubectl describe svc nginx-service
+重点查看：
+- Type
+- ClusterIP
+- Port
+- TargetPort
+- NodePort
+- Selector
+
+2. 检查 EndpointSlice
+这是非常重要的排错知识。
+kubectl get endpointslices
+指定命名空间：kubectl get endpointslices -n default
+也可以查看传统 Endpoints：kubectl get endpoints
+假设 Service 存在：nginx-service   NodePort   10.96.100.10
+但是 Endpoints 没有后端 Pod IP。这就说明 Service 没有找到符合条件的后端 Pod。
+
+常见原因：
+- Service 的 selector 写错。
+- Pod 的 labels 不匹配。
+- Pod 没有 Ready。
+- Pod 所在命名空间不正确。
+3. 检查 Service 和 Pod 标签
+查看 Service：kubectl get svc nginx-service -o yaml
+查看 Pod 标签：
+kubectl get pods --show-labels
+例如 Service：
+selector:
+  app: nginx
+而 Pod 标签：
+labels:
+  app: nginx-web
+两个标签不一致，就无法匹配。
+
+4. 检查 NodePort
+kubectl get svc nginx-service
+测试节点上的端口：curl http://192.168.79.130:30080
+在 Windows PowerShell 中也可以测试：Test-NetConnection 192.168.79.130 -Port 30080
+如果连接失败，需要进一步排查：
+1. Service 的 NodePort 配置。
+2. 节点 kube-proxy 或集群网络数据平面。
+3. 节点防火墙。
+4. VMware 虚拟网络。
+5. 后端 Pod 是否正常。
+注意：不能仅凭 NodePort 无法访问，就认定是 Kubernetes 网络故障。
+
+七、CoreDNS DNS 故障排查
+Kubernetes 集群内部经常通过 Service 名称访问服务。
+例如：nginx-service.default.svc.cluster.local
+如果 DNS 出现故障，可能导致微服务之间无法通过服务名称通信。
+1. 检查 CoreDNS
+kubectl get pods -n kube-system
+查看 CoreDNS：kubectl get deployment -n kube-system coredns
+查看日志：kubectl logs -n kube-system deployment/coredns
+
+2. 创建 DNS 测试 Pod
+kubectl run dns-test \
+  --image=busybox:1.36 \
+  --restart=Never \
+  --command -- sleep 3600
+进入容器：kubectl exec -it dns-test -- sh
+执行：nslookup kubernetes.default
+再测试：nslookup nginx-service.default.svc.cluster.local
+正常情况下，能够解析出对应 Service 的 ClusterIP。
+退出：exit
+删除测试 Pod：kubectl delete pod dns-test
+如果解析失败，排查方向包括：
+- CoreDNS Pod 是否正常。
+- CoreDNS Service 是否存在。
+- Pod 的 /etc/resolv.conf 是否正确。
+- NetworkPolicy 是否阻止 DNS 流量。
+- 集群网络是否正常。
+
+八、节点故障排查
+1. 检查节点状态
+kubectl get nodes -o wide
+如果出现：k8s-node1   NotReady
+说明节点无法正常向控制平面报告 Ready 状态。
+
+2. 查看节点详细信息
+kubectl describe node k8s-node1
+重点查看 Conditions：
+Condition	含义
+Ready		节点是否正常
+MemoryPressure	内存压力
+DiskPressure	磁盘压力
+PIDPressure	进程数量压力
+NetworkUnavailable网络是否不可用
+
+3. 登录故障节点检查
+在 k8s-node1 上执行：systemctl status kubelet
+查看 kubelet 日志：journalctl -u kubelet -n 100 --no-pager
+实时跟踪：journalctl -u kubelet -f
+检查 containerd：systemctl status containerd
+查看 containerd 日志：journalctl -u containerd -n 100 --no-pager
+查看磁盘空间：df -h
+查看内存：free -h
+查看 inode：df -i
+查看系统负载：uptime
+
+你之前遇到过 VMware 虚拟机异常关机、XFS 文件系统损坏的问题。
+所以这里特别强调：节点 NotReady 不一定是 Kubernetes 本身的问题，也可能是 Linux 系统、磁盘、containerd 或虚拟机环境出了问题。
+
+九、PVC 和存储故障排查
+你之前遇到过 local-path PVC 一直处于 Terminating 状态的问题，这部分正好结合之前的经验学习。
+1. 查看 PVC 状态
+kubectl get pvc -A
+查看 PV：kubectl get pv
+查看 StorageClass：kubectl get sc
+
+2. PVC Pending 怎么办？
+查看详细信息：kubectl describe pvc dynamic-pvc  重点看 Events。
+常见原因：
+故障		可能原因
+PVC Pending	没有匹配的 PV
+PVC Pending	StorageClass 不存在
+PVC Pending	动态供应器异常
+FailedMount	节点挂载失败
+FailedAttachVolume存储设备挂载失败
+PVC Terminating	finalizer 或使用中的资源阻止删除
+
+3. 检查 local-path-provisioner
+如果使用 local-path 存储：kubectl get pods -A | grep local-path
+查看相关日志：
+kubectl logs -n local-path-storage \
+  deployment/local-path-provisioner
+如果命名空间或 Deployment 名称与你的环境不同，先通过 kubectl get pods -A 确认实际名称。
+
+4. 检查 Pod 挂载情况
+kubectl describe pod Pod名称
+重点关注：
+MountVolume
+FailedMount
+Unable to attach or mount volumes
+不要直接强制删除 PVC。先确认 Pod 是否仍在使用它，以及 PV、StorageClass 和底层数据目录的情况。
+
+十、Kubernetes 性能优化
+前面主要讲故障排查，现在进入性能优化。
+企业中经常出现这样的情况：
+- Java 服务响应速度越来越慢。
+- Pod CPU 使用率突然达到100%。
+- 容器内存持续增长。
+- 节点负载过高。
+- Pod 被频繁驱逐。
+- 微服务之间网络延迟增加。
+我们需要掌握性能分析工具。
+1. CPU 和内存监控
+最常用的命令：
+kubectl top nodes
+查看所有 Pod 的资源：kubectl top pods -A
+查看指定命名空间：kubectl top pods -n default
+按照 CPU 排序：kubectl top pods -A --sort-by=cpu
+按照内存排序：kubectl top pods -A --sort-by=memory
+
+可能看到：
+NAME          CPU(cores)   MEMORY(bytes)
+nginx         5m           20Mi
+java-app      850m         1024Mi
+redis         120m         256Mi
+
+解释：
+- 5m：5 毫核 CPU。
+- 850m：850 毫核 CPU，也就是0.85核。
+- 1024Mi：1024 MiB 内存。
+注意
+ kubectl top 需要 Metrics Server 提供资源指标。如果执行时报错：
+error: Metrics API not available
+
+说明需要先检查 Metrics Server 是否部署成功。
+kubectl get pods -n kube-system | grep metrics-server
+检查 API：kubectl get apiservices | grep metrics
+如果没有 Metrics Server，需要单独部署。不要把 kubectl top 无法使用误判为集群 CPU、内存出现故障。
+
+2. 理解 requests 和 limits
+这是 Kubernetes 性能优化最重要的知识之一。
+例如：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: resource-demo
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+
+两者区别：
+参数	作用
+requests.cpu	调度时预留的 CPU 资源基准
+requests.memory	调度时预留的内存资源基准
+limits.cpu	容器 CPU 使用上限
+limits.memory	容器内存使用上限
+
+重点理解：
+CPU 超过 limit，通常会被限制使用；内存超过 limit，通常可能触发 OOMKilled。
+CPU 和内存的限制机制是不一样的。
+创建：kubectl apply -f resource-demo.yaml
+查看：kubectl describe pod resource-demo
+查看资源使用情况：kubectl top pod resource-demo
+
+3. 节点资源优化
+登录 Linux 节点执行：
+查看 CPU：lscpu
+查看内存：free -h
+查看磁盘：df -h
+查看磁盘读写情况：iostat -xz 1 5
+如果没有 iostat：dnf install -y sysstat
+查看进程：top
+查看内存占用较高的进程：ps aux --sort=-%mem | head
+查看 CPU 占用较高的进程：ps aux --sort=-%cpu | head
+
+4. Pod 调度优化
+假设有一个 Java 微服务，需要优先运行在 node1。
+可以使用节点标签：kubectl label node k8s-node1 disk=ssd
+Pod 配置：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: java-performance
+spec:
+  nodeSelector:
+    disk: ssd
+  containers:
+  - name: java
+    image: nginx:1.27
+
+这里用 Nginx 模拟业务容器，重点是学习调度规则。
+创建：kubectl apply -f java-performance.yaml
+查看：kubectl get pod java-performance -o wide
+如果调度成功，就会优先被安排到带有 disk=ssd 标签的节点。
+实验结束后清理：
+kubectl delete pod java-performance
+kubectl label node k8s-node1 disk-
+
+5. 网络性能排查
+Linux 节点上可以使用以下工具：
+命令	用途
+ping	测试网络连通性
+curl	测试 HTTP 服务
+ss	查看 TCP/UDP 连接
+ip	查看网络接口和路由
+traceroute分析网络路径
+tcpdump	抓取网络数据包
+iperf3	测试网络吞吐量
+
+常用示例：ss -tunlp
+查看路由：ip route
+查看网卡：ip addr
+测试服务：curl -v http://192.168.79.130:30080
+抓取指定端口的数据包：tcpdump -i any port 30080
+安装 iperf3：dnf install -y iperf3
+iperf3 需要一端启动服务端，另一端作为客户端进行测试，不能只执行一条命令就得出集群吞吐量。
+
+十一、企业级故障排查工具
+除了 kubectl，还有一些值得了解的工具。
+1. Prometheus
+监控 CPU、内存、节点状态、容器指标，支持告警规则。
+你之前第16课已经接触过集群监控。
+
+2. Grafana
+将 Prometheus 指标展示为可视化监控面板。
+
+3. Lens
+可视化管理 Kubernetes 集群、Pod、日志和资源。
+
+4. K9s
+终端交互式 Kubernetes 管理工具，可以快速查看资源、日志和事件。
+这几个工具不要求你现在全部安装，先掌握 kubectl 和 Linux 原生命令，再学习可视化运维工具。
+
+十二、综合实战：模拟企业微服务故障排查
+现在把前面学到的知识串起来。
+假设企业部署了一个 Nginx 服务，要求：
+- 运行3个 Pod 副本。
+- 通过 NodePort 对外提供服务。
+- 每个 Pod 设置 CPU 和内存限制。
+- 能够查看日志和资源使用情况。
+- 出现故障时能够快速定位。
+1. 创建 Deployment
+vi /root/troubleshoot-deployment.yaml
+内容：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: troubleshoot-nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: troubleshoot-nginx
+  template:
+    metadata:
+      labels:
+        app: troubleshoot-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "64Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+
+部署：
+kubectl apply -f /root/troubleshoot-deployment.yaml
+检查：
+kubectl get deployment
+kubectl get pods -o wide
+
+2. 创建 Service
+vi /root/troubleshoot-service.yaml
+内容：
+apiVersion: v1
+kind: Service
+metadata:
+  name: troubleshoot-service
+spec:
+  type: NodePort
+  selector:
+    app: troubleshoot-nginx
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 30081
+部署：kubectl apply -f /root/troubleshoot-service.yaml
+查看：kubectl get svc
+
+3. 测试服务
+在 Master 节点：curl http://192.168.79.130:30081
+在 Windows 浏览器访问：http://192.168.79.130:30081
+正常应该看到 Nginx 欢迎页面。
+
+4. 完整排查流程
+假设 Windows 浏览器突然无法访问。
+你应该按照这个顺序排查：
+# 1. 查看节点
+kubectl get nodes
+
+# 2. 查看 Deployment
+kubectl get deployment troubleshoot-nginx
+
+# 3. 查看 Pod
+kubectl get pods -o wide
+
+# 4. 查看 Pod 详细信息
+kubectl describe pod Pod名称
+
+# 5. 查看日志
+kubectl logs Pod名称
+
+# 6. 查看 Service
+kubectl get svc troubleshoot-service
+
+# 7. 查看 EndpointSlice
+kubectl get endpointslices
+
+# 8. 查看事件
+kubectl get events --sort-by='.metadata.creationTimestamp'
+
+# 9. 查看资源使用情况（需要 Metrics Server）
+kubectl top nodes
+kubectl top pods
+
+通过这些命令，基本可以定位大部分常见 Kubernetes 故障。
+5. 综合实验清理
+kubectl delete -f /root/troubleshoot-service.yaml
+kubectl delete -f /root/troubleshoot-deployment.yaml
+
+前面创建的临时故障 Pod 也要确认已经清理：
+kubectl get pods -A
+
+十三、本节课知识总结
+这节课需要重点记住以下内容：
+故障类型		首选排查命令
+Pod 无法启动	kubectl describe pod
+容器反复重启	kubectl logs --previous
+镜像拉取失败	kubectl describe pod
+Deployment 副本异常kubectl describe deployment
+Service 无法访问	kubectl get endpointslices
+DNS 无法解析	kubectl logs -n kube-system deployment/coredns
+Node NotReady	kubectl describe node
+kubelet 故障	journalctl -u kubelet
+PVC 无法绑定	kubectl describe pvc
+CPU、内存过高	kubectl top pods -A
+磁盘空间不足	df -h
+网络连接异常	ss -tunlp、tcpdump
+
+十四、第25课实战验收
+下面这些任务建议你在自己的三节点集群完成。
+实战任务清单
+0/10 已完成
+[ ] 创建一个错误镜像 Pod，定位 ImagePullBackOff 并修复
+[ ] 创建一个 CrashLoopBackOff Pod，查看上一次容器日志
+[ ] 模拟 OOMKilled，理解 Exit Code 137
+[ ] 部署3副本 Deployment，并检查副本状态
+[ ] 创建 NodePort Service，验证 Windows 浏览器访问
+[ ] 使用 EndpointSlice 排查 Service 后端
+[ ] 创建 DNS 测试 Pod，执行 nslookup
+[ ] 检查三个节点的 Ready、MemoryPressure、DiskPressure
+[ ] 检查 PVC、PV 和 StorageClass
+[ ] 使用 kubectl top 查看节点和 Pod 资源（需要 Metrics Server）

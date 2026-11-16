@@ -1,0 +1,390 @@
+上一课我们学习了 Pod，知道了 Pod 是 Kubernetes 中最小的部署和调度单位。
+但现在有一个问题：假设我们部署了一个 Java 微服务，运行在一个 Pod 中。如果这个 Pod 意外崩溃了，谁来重新创建它？
+如果我们希望同时运行 3 个 Pod，谁来保证始终有 3 个？
+
+这就是今天要学习的两个核心对象：
+- ReplicaSet（副本集）：负责保证 Pod 副本数量。
+- Deployment（部署）：负责管理应用的部署、升级、回滚等操作。
+
+一、先理解为什么需要 ReplicaSet
+假设我们直接创建一个 Pod：kubectl run nginx --image=nginx
+查看 Pod：kubectl get pods
+可能得到：
+NAME    READY   STATUS    RESTARTS   AGE
+nginx   1/1     Running   0          10s
+现在删除这个 Pod：kubectl delete pod nginx
+再查看：kubectl get pods
+结果：
+No resources found
+Pod 被删除后，就不会自动重新创建。
+
+注意：如果只是 Pod 内部的容器进程崩溃，Kubelet 通常会根据 Pod 的重启策略重新启动容器。
+但如果整个 Pod 对象被删除，就没有控制器负责重新创建它。这显然不符合生产环境的需求。
+
+例如：
+一个 Java 微服务希望始终运行 3 个实例：
+           Java 微服务
+                |
+       -------------------
+       |        |        |
+     Pod-1    Pod-2    Pod-3
+
+我们希望：
+1. Pod-1 挂了，自动创建一个新的 Pod。
+2. Pod-2 被误删，自动创建一个新的 Pod。
+3. 始终保持 3 个 Pod 在运行。
+这就是 ReplicaSet 的作用。
+
+
+二、ReplicaSet（副本集）
+1. ReplicaSet 是什么？
+ReplicaSet 是 Kubernetes 中负责维护 Pod 副本数量的控制器。
+它的核心目标非常简单：确保集群中始终有指定数量的 Pod 副本处于期望状态。
+例如：replicas: 3  意思就是希望始终有 3 个 Pod 副本。
+它的工作原理：
+假设当前期望数量是 3：
+当前 Pod 数量	ReplicaSet 的行为
+3 个	不做处理
+2 个	创建 1 个
+1 个	创建 2 个
+4 个	删除多余的 1 个
+0 个	创建 3 个
+
+这里有一个非常重要的概念：
+期望状态（Desired State）和实际状态（Actual State）。
+Kubernetes 的很多控制器都是围绕这个机制工作的。
+
+2. 创建 ReplicaSet
+在 master 节点创建 YAML 文件：vim nginx-rs.yaml 写入：
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: nginx-rs
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:latest
+          ports:
+            - containerPort: 80
+
+我们逐项理解：
+配置	作用
+apiVersion	API 版本
+kind	资源类型，这里是 ReplicaSet
+metadata.name	ReplicaSet 名称
+spec.replicas	期望 Pod 数量
+spec.selector	用于匹配 Pod 的标签
+template	创建 Pod 所使用的模板
+template.metadata.labels	Pod 的标签
+template.spec.containers	Pod 中的容器配置
+
+这里重点理解三个配置：
+① replicas: 3
+表示期望创建 3 个 Pod。
+
+② selector
+selector:
+  matchLabels:
+    app: nginx
+表示 ReplicaSet 通过标签 app=nginx 来识别和管理 Pod。
+
+③ template
+template:
+  metadata:
+    labels:
+      app: nginx
+这是创建 Pod 的模板。
+注意：这里 Pod 的标签必须满足 selector 的匹配条件，否则 ReplicaSet 就无法通过这个选择器管理创建出来的 Pod。
+
+3. 创建并查看 ReplicaSet：kubectl apply -f nginx-rs.yaml
+
+查看 ReplicaSet：kubectl get rs
+
+输出类似：
+NAME       DESIRED   CURRENT   READY   AGE
+nginx-rs   3         3         3       20s
+
+几个字段：
+- DESIRED：期望副本数量。
+- CURRENT：当前实际副本数量。
+- READY：已经就绪的副本数量。
+查看 Pod：
+kubectl get pods -o wide
+你会发现 Kubernetes 自动创建了 3 个 Pod，而且它们可能分布在不同的 Node 节点上。
+这也体现了 Kubernetes 的集群调度能力。
+
+4. 测试 ReplicaSet 的自动恢复能力
+先查看 Pod：kubectl get pods
+删除其中一个：kubectl delete pod nginx-rs-xxxxx  注意替换成实际 Pod 名称。
+然后立即查看：kubectl get pods
+
+你会发现：
+- 原来的 Pod 被删除。
+- ReplicaSet 发现实际数量少于 3。
+- ReplicaSet 自动创建一个新的 Pod。
+这就是 ReplicaSet 的核心功能。
+
+5. 修改副本数量
+如果我们希望从 3 个 Pod 扩容到 5 个：kubectl scale rs nginx-rs --replicas=5
+查看：kubectl get pods  就会增加到 5 个。
+缩容到 2 个：kubectl scale rs nginx-rs --replicas=2
+也可以通过修改 YAML 文件：
+replicas: 5
+
+然后重新执行：
+kubectl apply -f nginx-rs.yaml
+
+三、Deployment（部署）
+刚才我们学习了 ReplicaSet，它能够保证 Pod 的副本数量。但是还有一个问题：
+假设我们的 Java 微服务现在运行的是：nginx:1.26  现在想升级到：nginx:1.27
+
+如果直接修改 ReplicaSet 的 Pod 模板，会发生什么？
+ReplicaSet 并不会自动删除旧 Pod，再创建新 Pod 来完成平滑升级。
+它主要负责维持副本数量，而不是管理应用版本发布。
+
+因此 Kubernetes 引入了 Deployment。
+1. Deployment 是什么？Deployment 是 Kubernetes 中用于管理无状态应用部署的控制器。
+它主要负责：
+1. 创建和管理 ReplicaSet。
+2. 管理 Pod 副本数量。
+3. 实现滚动更新。
+4. 实现版本回滚。
+5. 管理应用部署历史。
+最重要的一点：
+Deployment 并不是直接管理 Pod，而是通过 ReplicaSet 间接管理 Pod。
+
+它们之间的关系：
+Deployment
+    |
+    | 管理
+    |
+ReplicaSet
+    |
+    | 管理
+    |
+  Pod
+  Pod
+  Pod
+
+这三个对象的职责：
+对象	主要职责
+Pod	运行容器
+ReplicaSet	保证 Pod 副本数量
+Deployment	管理 ReplicaSet，实现发布和回滚
+
+2. 创建 Deployment
+创建文件：vim nginx-deploy.yaml  写入：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deploy
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.26
+          ports:
+            - containerPort: 80
+
+
+注意：与 ReplicaSet 的 YAML 非常相似。
+最大的区别就是：kind: Deployment
+我们创建 Deployment：kubectl apply -f nginx-deploy.yaml
+查看：kubectl get deployments
+输出类似：
+NAME          READY   UP-TO-DATE   AVAILABLE   AGE
+nginx-deploy  3/3     3            3           30s
+
+再查看：
+kubectl get rs
+kubectl get pods
+
+你会发现：
+Kubernetes 自动创建了一个 ReplicaSet，然后 ReplicaSet 创建了 3 个 Pod。
+3. Deployment 滚动更新
+这是 Deployment 最重要的功能之一。
+
+假设我们现在运行：
+image: nginx:1.26
+现在准备升级到：
+image: nginx:1.27
+
+修改 YAML：
+image: nginx:1.27
+然后执行：
+kubectl apply -f nginx-deploy.yaml
+
+Deployment 会发现 Pod 模板发生变化，于是创建一个新的 ReplicaSet。
+
+接下来通过滚动更新逐步完成替换：
+大致过程：
+更新前：
+
+旧 ReplicaSet
+  |
+  +-- nginx:1.26
+  +-- nginx:1.26
+  +-- nginx:1.26
+
+
+更新中：
+旧 ReplicaSet          新 ReplicaSet
+  |                        |
+  +-- nginx:1.26            +-- nginx:1.27
+  +-- nginx:1.26
+                            +-- nginx:1.27
+
+更新完成：
+旧 ReplicaSet          新 ReplicaSet
+  |                        |
+  |                        +-- nginx:1.27
+  |                        +-- nginx:1.27
+  |                        +-- nginx:1.27
+
+
+注意：
+Deployment 默认使用 RollingUpdate（滚动更新）策略。
+它可以逐步替换旧 Pod，避免一次性删除所有旧 Pod。
+但要注意，滚动更新本身并不保证业务绝对无中断，还需要合理设置副本数量、探针和更新策略。
+
+4. 查看 Deployment 更新状态
+kubectl rollout status deployment nginx-deploy
+
+查看更新历史：
+kubectl rollout history deployment nginx-deploy
+
+查看 ReplicaSet：
+kubectl get rs
+
+你可能看到：
+NAME                   DESIRED   CURRENT   READY
+nginx-deploy-xxxxx     0         0         0
+nginx-deploy-yyyyy     3         3         3
+
+
+这里很有意思：
+Deployment 更新版本时，通常不会直接删除旧 ReplicaSet，而是将它的副本数量缩减到 0，保留它用于后续回滚。
+5. Deployment 版本回滚
+假设 nginx:1.27 更新后出现问题，需要回到之前的 nginx:1.26。
+
+执行：
+kubectl rollout undo deployment nginx-deploy
+
+查看：
+kubectl get pods
+Deployment 会重新调整 ReplicaSet 的副本数量，恢复之前的版本。
+
+还可以查看回滚历史：
+kubectl rollout history deployment nginx-deploy
+
+指定版本回滚：
+kubectl rollout undo deployment nginx-deploy --to-revision=1
+
+四、Deployment 常用命令总结
+命令	作用
+kubectl get deploy	查看 Deployment
+kubectl get rs	查看 ReplicaSet
+kubectl describe deploy nginx-deploy	查看 Deployment 详细信息
+kubectl scale deploy nginx-deploy --replicas=5	扩容到 5 个副本
+kubectl set image deployment/nginx-deploy nginx=nginx:1.27	修改容器镜像
+kubectl rollout status deployment/nginx-deploy	查看更新状态
+kubectl rollout history deployment/nginx-deploy	查看更新历史
+kubectl rollout undo deployment/nginx-deploy	回滚上一版本
+kubectl rollout restart deployment/nginx-deploy	重启 Deployment 管理的 Pod
+
+五、结合你的三节点 K8s 集群做实验
+你现在有：
+- k8s-master
+- k8s-node1
+- k8s-node2
+我们可以利用这三个节点来观察 Deployment 和 ReplicaSet 的实际工作过程。
+
+建议按照下面顺序操作。
+第2课实验任务
+建议在 k8s-master 上执行 kubectl 命令
+1. 创建 Deployment：使用 nginx:1.26 创建 3 个副本。
+2. 观察控制器关系：分别执行 kubectl get deploy、kubectl get rs、kubectl get pods -o wide。
+3. 测试 Pod 自动恢复：手动删除一个 Pod，观察 ReplicaSet 是否重新创建。
+4. 测试扩容和缩容： 将副本数从 3 改为 5，再缩减为 2。
+5. 测试滚动更新：将 nginx:1.26 更新为 nginx:1.27，观察新旧 ReplicaSet 的变化。
+6. 测试版本回滚：执行 kubectl rollout undo，恢复之前的版本。
+
+六、本课最重要的知识点
+	Kubernetes 控制器关系
+Deployment：管理应用发布、更新、回滚
+	↓
+ReplicaSet：维持期望的 Pod 副本数量
+	↓
+Pod：运行容器应用
+
+记住这句话：
+Deployment 管理 ReplicaSet，ReplicaSet 管理 Pod，Pod 运行容器。
+还有一个实际工作中非常重要的知识点：我们绝大多数情况下不会直接创建 ReplicaSet，
+而是创建 Deployment，让 Deployment 自动管理 ReplicaSet。
+
+七、课后理解测试
+第2课知识检测
+4/4 已作答
+
+1. 直接删除一个由 ReplicaSet 管理的 Pod，会发生什么？
+Pod 永久消失
+ReplicaSet 自动创建新的 Pod
+Deployment 自动回滚
+整个节点重启
+
+回答正确
+ReplicaSet 会发现实际 Pod 数量少于期望数量，于是创建新的 Pod。
+
+
+2. Deployment 和 ReplicaSet 之间是什么关系？
+Deployment 直接运行容器
+ReplicaSet 管理 Deployment
+Deployment 管理 ReplicaSet，ReplicaSet 管理 Pod
+两者没有关系
+
+回答正确
+Deployment 通过管理 ReplicaSet 来实现应用发布和版本管理。
+
+
+3. Deployment 将 nginx:1.26 更新为 nginx:1.27，通常会发生什么？
+直接修改原有容器的镜像
+创建新的 ReplicaSet，逐步替换旧 Pod
+删除整个集群
+只修改 Pod 标签
+
+回答正确
+Pod 的镜像属于 Pod 模板的一部分，模板变化会触发新的 ReplicaSet。
+
+
+
+4. ReplicaSet 最核心的职责是什么？
+管理容器镜像仓库
+维护期望数量的 Pod 副本
+管理节点网络
+实现版本回滚
+
+回答正确
+ReplicaSet 的核心就是协调实际副本数量，使其符合期望状态。
+
+
+4/4 分
+重新答题
+我的建议： 先不要急着学习 Service。把 ReplicaSet 的自动恢复机制和 Deployment 的滚动更新机制
+在自己的三节点集群中实际跑通，这两个概念就算真正掌握了。

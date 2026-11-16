@@ -1,0 +1,70 @@
+安装 tar：dnf install -y tar
+安装 wget：dnf install -y wget
+
+先检查是否安装：curl --version  如果有输出，直接下载：
+cd /usr/local/src
+curl -LO https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
+也可以使用：wget https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
+顺便记一个知识点：
+命令	用途
+wget	下载文件
+curl -O	下载文件并保留远程文件名
+curl -o 文件名	下载文件并指定本地文件名
+建议你的 Linux 实验环境同时保留 curl 和 wget，后续安装 Kubernetes 相关工具经常会用到。
+
+在你的 Rocky Linux 9.8 Kubernetes 集群（v1.37.2） 中，我们使用 Helm 3/4 兼容的官方安装方式来安装 Helm。
+一、Helm 是什么？
+Helm 可以理解为 Kubernetes 的软件包管理工具，类似于：
+Linux		Kubernetes
+yum / dnf		Helm
+rpm 软件包	Helm Chart
+yum install nginx	helm install nginx
+
+之前我们部署 Nginx，需要自己编写 Deployment、Service 等 YAML 文件。
+有了 Helm，可以通过 Chart（应用模板包）快速安装一整套 Kubernetes 应用。
+例如：helm install traefik traefik/traefik  就可以安装 Traefik。
+
+二、安装 Helm
+建议在你的 k8s-master 节点上安装 Helm，因为 Helm 是客户端工具，通常只需要在管理集群的机器上安装，不需要每个 Node 都安装。
+1. 下载 Helm 安装脚本
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+注意：这个脚本使用的是 Helm 3 安装入口，适合需要明确使用 Helm 3 的场景。
+不过，现在是 2026 年 11 月，Helm 已经发布了 Helm 4，Helm 3 将于 2026 年 11 月 11 日结束安全维护。因此这次建议直接安装 Helm 4，不再安装 Helm 3。
+
+1. 下载 Helm 4
+先确认系统架构：uname -m
+你的 Rocky Linux 虚拟机如果是 x86_64，执行：
+cd /usr/local/src
+wget https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz
+
+2. 解压并安装
+tar -zxvf helm-v4.3.0-linux-amd64.tar.gz
+mv linux-amd64/helm /usr/local/bin/helm
+chmod +x /usr/local/bin/helm
+
+3. 验证安装
+helm version
+
+查看帮助：
+helm help
+
+4. 检查 Kubernetes 集群连接
+kubectl get nodes
+Helm 默认使用当前 kubectl 配置的 kubeconfig 连接集群。
+
+你不需要在每个 Node 节点安装 Helm，只需要在管理集群的机器上安装即可。
+
+三、安装完成后，先认识几个命令
+命令		作用
+helm version	查看 Helm 版本
+helm repo add	添加 Chart 仓库
+helm repo update	更新仓库索引
+helm repo list	查看仓库列表
+helm search repo	搜索应用
+helm install	安装应用
+helm list		查看已安装应用
+helm upgrade	更新应用
+helm rollback	回滚应用
+helm uninstall	卸载应用
+
+注意：Helm 3 和 Helm 4 都不需要像 Helm 2 那样安装 Tiller 服务端组件。

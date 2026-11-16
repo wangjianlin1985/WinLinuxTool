@@ -1,0 +1,71 @@
+下一步：先准备 kubeadm 初始化
+先解释一下接下来的顺序：
+1. 在 Master 执行 kubeadm init，建立控制平面。
+2. 配置 kubectl，使我们能管理集群。
+3. 安装 Calico，让 Pod 网络真正工作。
+4. Node1、Node2 执行 kubeadm join 加入集群。
+注意：先初始化 Master，再安装 Calico。初始化完成但 CNI 尚未安装时，节点显示 NotReady 是正常的
+
+现在在 Master 上执行初始化
+先确认当前终端是在 k8s-master，然后执行：
+kubeadm init \
+  --apiserver-advertise-address=192.168.79.130 \
+  --control-plane-endpoint=192.168.79.130 \
+  --pod-network-cidr=10.244.0.0/16 \
+  --service-cidr=10.96.0.0/12 \
+  --cri-socket=unix:///run/containerd/containerd.sock \
+  --image-repository=registry.aliyuncs.com/google_containers
+
+这几个参数分别表示：
+参数				作用
+--apiserver-advertise-address		指定 API Server 对外公布的 Master 地址
+--control-plane-endpoint		指定控制平面统一访问入口
+--pod-network-cidr			指定 Pod 地址池
+--service-cidr			指定 Service 虚拟 IP 地址池
+--cri-socket			指定使用 containerd 作为容器运行时
+这里将控制平面入口设置为 Master 的 IP，适合当前单 Master 实验集群；将来如果扩展为高可用集群，再考虑 DNS 或 VIP。
+
+注意
+ 这一步会正式创建集群控制平面，不要在 Node1、Node2 上执行。
+执行后可能需要等待一段时间下载镜像并启动组件。先不要执行其他命令，把完整输出贴给我，
+尤其是最后的 kubeadm join 提示。接下来我们配置 kubectl，再安装 Calico 3.33.0，并明确设置 VXLAN 和 10.244.0.0/16 地址池。
+
+正式安装Calico 3.33.00 网络插件，我们采用官方 Calico，使用 Kubernetes API 作为数据存储，网络模式选择 VXLAN。
+第一步：下载 Calico 安装配置
+在 Master 上执行：
+cd /root
+curl -LO https://raw.githubusercontent.com/projectcalico/calico/v3.33.0/manifests/tigera-operator.yaml
+curl -LO https://raw.githubusercontent.com/projectcalico/calico/v3.33.0/manifests/custom-resources.yaml
+这里先下载两个文件：
+- tigera-operator.yaml：部署 Calico Operator，负责管理 Calico 组件的安装和生命周期。
+- custom-resources.yaml：定义 Calico 的网络配置，例如 Pod 网段和 VXLAN 模式。
+注意：我们先下载，不急着应用。官方 Operator 安装方式支持通过 Installation 资源配置 VXLAN。
+下载完成后，先检查文件是否存在：
+ls -lh /root/tigera-operator.yaml /root/custom-resources.yaml
+
+修改Pod 网段和网络模式VXLAN（使用 UDP 隧道封装，跨节点传输）
+sed -i \
+  -e 's#cidr: 192.168.0.0/16#cidr: 10.244.0.0/16#' \
+  -e 's#encapsulation: VXLANCrossSubnet#encapsulation: VXLAN#' \
+  /root/custom-resources.yaml
+
+在 Master（k8s-master）上执行：
+kubectl apply -f /root/tigera-operator.yaml
+这个清单会创建 Tigera Operator 相关资源。Operator 可以理解为 Calico 的自动化管理组件，
+后续由它根据 custom-resources.yaml 中的配置部署 Calico 网络组件。
+
+执行后查看 Operator Pod：
+kubectl get pods -n tigera-operator
+我们的目标状态：
+READY   STATUS
+1/1     Running
+
+现在正式应用 Calico 的自定义网络配置。在 Master 上执行：
+kubectl apply -f /root/custom-resources.yaml
+
+这一步会告诉 Tigera Operator：
+- Pod 网段使用 10.244.0.0/16，与 kubeadm 初始化时保持一致。
+- 使用 VXLAN 封装模式。
+- 启用 Pod 出站 NAT。
+应用后查看 Calico 相关资源：
+kubectl get pods -A

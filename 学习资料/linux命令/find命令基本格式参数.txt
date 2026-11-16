@@ -1,0 +1,98 @@
+基本格式：
+find [查找路径] [查找条件] [执行动作]
+
+1. 常用参数速查
+参数	简要说明
+-name	按文件名查找，区分大小写
+-iname	按文件名查找，忽略大小写
+-type f	查找普通文件
+-type d	查找目录
+-type l	查找符号链接
+-size	按文件大小查找
+-mtime	按修改天数查找
+-mmin	按修改分钟查找
+-atime	按访问天数查找
+-ctime	按状态修改天数查找
+-perm	按文件权限查找
+-user	按文件所有者查找
+-group	按文件所属组查找
+-uid	按用户UID查找
+-gid	按用户组GID查找
+-empty	查找空文件或空目录
+-maxdepth	限制最大搜索深度
+-mindepth	设置最小搜索深度
+-prune	排除指定目录
+-a	多条件同时满足（AND）
+-o	满足其中一个条件（OR）
+-not	条件取反
+-exec	对查找结果执行命令
+-delete	删除符合条件的文件
+-print	输出查找结果
+-ls	详细显示查找结果
+
+2. 常用操作示例
+简要名称		命令示例				命令说明
+查找文件		find /root -name "test.txt"		按文件名查找
+查找日志		find /var/log -name "*.log"		查找日志文件
+查找目录		find /root -type d -name "test"	查找指定目录
+查找大文件	find / -type f -size +500M		查找大于500MB的文件
+查找空文件	find /tmp -type f -empty		查找空文件
+查找旧文件	find /tmp -mtime +7		查找7天以前修改的文件
+查找指定权限	find / -perm 777 -type f		查找权限为777的文件
+查找指定用户	find /home -user root		查找root拥有的文件
+限制搜索深度	find /root -maxdepth 2 -name "*.txt"	限制最大搜索层级
+排除指定目录	find /root -path "/root/backup" -prune -o -type f -print	排除backup目录
+查找并执行	find /var/log -name "*.log" -exec ls -lh {} +	查找日志并显示详细信息
+查找并删除	find /tmp -name "*.tmp" -delete	删除符合条件的临时文件
+
+3. 时间参数速查
+写法		含义
+-mtime 0		最近24小时修改
+-mtime -1	最近24小时修改
+-mtime +7	超过7个完整24小时周期
+-mtime 7		7至8天前修改
+-mmin -30	最近30分钟修改
+-mmin +30	超过30分钟前修改
+
+4. 文件大小参数
+写法		含义
+-size +100M	大于100MiB
+-size -100M	小于100MiB
+-size 100M	大小处于100MiB对应的区间
+-size +1G		大于1GiB
+-size +1024k	大于1024KiB
+
+5 find 执行动作参数
+这部分非常重要，尤其适合 Linux 运维人员。
+参数		简要名称		命令说明
+-print		输出路径		输出找到的文件路径，默认动作
+-print0		安全输出		使用空字符分隔路径，适合处理特殊文件名
+-exec		执行命令		对找到的文件执行指定命令
+-exec ... {} \;	逐个执行		每找到一个文件执行一次命令
+-exec ... {} +	批量执行		将多个文件路径作为参数批量执行命令
+-delete		删除文件		删除符合条件的文件
+-ok		交互执行		每执行一次命令前询问用户
+-ls		详细显示		以类似 ls -dils 的格式显示文件信息
+
+(1). -print 输出文件路径：find /root/linux-text-lab/find -type f -print
+(2). -exec 逐个执行：find /root/linux-text-lab/find -name "*.log" -exec ls -lh {} \;
+其中：
+- {}：代表当前找到的文件。
+- \;：表示执行命令结束。
+- 每找到一个文件，就执行一次 ls -lh。
+(3). -exec + 批量执行：find /root/linux-text-lab/find -name "*.log" -exec ls -lh {} +
+与 \; 不同，+ 会尽可能将多个文件一次性传递给命令执行，效率通常更高。
+(4). -delete 删除文件：find /root/linux-text-lab/find -name "*.tmp" -delete	删除所有 .tmp 文件
+谨慎使用-delete 会直接删除文件，没有回收站。建议先执行不带 -delete 的命令确认匹配结果。
+(5). -ok 交互执行：
+find /root/linux-text-lab/find -name "*.log" -ok rm {} \;	每删除一个日志文件前，都需要用户确认。
+
+记忆口诀：
+- -name：找名字
+- -type：找类型
+- -size：找大小
+- -mtime：找时间
+- -perm：找权限
+- -user：找用户
+- -exec：执行命令
+- -delete：删除文件

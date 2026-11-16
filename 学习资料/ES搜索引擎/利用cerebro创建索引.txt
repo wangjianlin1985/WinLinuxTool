@@ -1,0 +1,16 @@
+打开菜单more->create index,输入索引库名称itcase,分片数量3，副本数量1。
+拉动滚动条最右下方有Create按钮点击创建，回到overview页面可以查看索引分片分布情况。
+
+如果是在Kibana中类似执行下面的DSL创建
+PUT/itcast 
+{
+    "settings": {
+        "number_of_shards":3,// 分片数量
+        "number_of_replicas":1//副本数量
+    }, 
+    "mappings": {
+        "properties": {
+            //mapping映射定义...
+        }
+    }
+}

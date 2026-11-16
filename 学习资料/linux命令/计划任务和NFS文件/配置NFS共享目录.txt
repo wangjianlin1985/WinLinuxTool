@@ -1,0 +1,27 @@
+编辑配置文件：
+vi /etc/exports
+
+常见写法
+# 写法1：指定网段
+/export/share 192.168.253.0/24(rw,sync,root_squash)
+# 写法2：指定单个IP
+/export/share 192.168.253.149(rw,sync)
+# 写法3：允许所有客户端（仅测试）
+/export/share *(ro,sync)
+# 写法4：多个客户端设置不同权限
+/export/share 192.168.253.149(rw,sync) 192.168.253.129(ro,sync)
+
+常用参数
+参数	含义
+rw	允许读写
+ro	只读
+sync	同步写入，数据安全性较好
+async	异步写入，性能可能更高，但有数据丢失风险
+root_squash	将客户端 root 映射为匿名用户，默认通常启用
+no_root_squash	不映射客户端 root，安全风险较高
+all_squash	将所有客户端用户映射为匿名用户
+
+使配置生效
+exportfs -rav
+
+建议： 生产环境优先使用指定网段或 IP，搭配 rw、sync、root_squash，避免直接使用 * 和 no_root_squash。

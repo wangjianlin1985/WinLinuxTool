@@ -1,0 +1,495 @@
+一、本课环境与版本规划
+沿用 A 方案当前已经确定的版本：
+软件		版本		用途
+Rocky Linux	9.8		操作系统
+JDK		17		Java 运行环境
+Hadoop		3.5.0		HDFS 存储
+ZooKeeper	3.9.7		分布式协调服务
+HBase		2.6.7-hadoop3	分布式 NoSQL 数据库
+主机规划：
+主机名	IP 地址	角色
+master	192.168.79.10	ZooKeeper、HMaster、RegionServer
+本课先采用单机伪分布式部署，后续扩展集群时再增加 ZooKeeper 和 RegionServer 节点。
+
+二、目录规划
+这次把每个组件的安装目录、数据目录、日志目录和临时目录明确分开。
+1. ZooKeeper
+/usr/local/bigdata/zookeeper/    # 软件安装目录
+/data/zookeeper/
+├── data/                        # 快照数据
+└── logs/                        # 事务日志
+
+2. HBase
+/usr/local/bigdata/hbase/        # 软件安装目录
+/data/hbase/
+├── logs/                        # HBase 运行日志
+└── tmp/                         # HBase 临时文件
+
+3. HBase 在 HDFS 中的数据
+/hbase/                          # HBase 数据仓库
+
+4. 已有 Hadoop 配置
+/usr/local/bigdata/hadoop/
+├── etc/hadoop/
+│   ├── core-site.xml
+│   ├── hdfs-site.xml
+│   └── ...
+
+直接引用，不复制
+特别注意：
+- ZooKeeper 的事务日志放在 /data/zookeeper/logs，快照放在 /data/zookeeper/data。
+- HBase 的日志放在 /data/hbase/logs，不放到 /usr/local/bigdata/hbase/logs。
+- HBase 的实际数据库文件存储在 HDFS 的 /hbase，不是本地 /data/hbase。
+
+
+三、整体架构
+本次部署后的服务关系：
+                   master
+              192.168.79.10
+                     |
+          +----------+----------+
+          |                     |
+      ZooKeeper              HDFS
+       :2181                 :8020
+          |                     |
+          |                 NameNode
+          |                     |
+          +----------+----------+
+                     |
+                   HBase
+                     |
+             +-------+-------+
+             |               |
+          HMaster        RegionServer
+             |               |
+             +-------+-------+
+                     |
+                HDFS /hbase
+
+三个核心组件的作用：
+组件		作用
+ZooKeeper	管理 HBase 集群协调、状态和选举
+HMaster		管理表、Region 分配、RegionServer
+RegionServer	负责实际数据读写和 Region 管理
+
+四、部署 ZooKeeper 3.9.7
+4.1 创建软件与数据目录
+使用 dsj_admin 用户登录 master。
+sudo mkdir -p /data/zookeeper/data
+sudo mkdir -p /data/zookeeper/logs
+sudo chown -R dsj_admin:dsj_admin /data/zookeeper
+检查：
+ls -ld /data/zookeeper/data
+ls -ld /data/zookeeper/logs
+
+4.2 下载 ZooKeeper
+进入软件目录：cd /usr/local/bigdata
+下载：wget https://archive.apache.org/dist/zookeeper/zookeeper-3.9.7/apache-zookeeper-3.9.7-bin.tar.gz
+解压：tar -zxvf apache-zookeeper-3.9.7-bin.tar.gz
+重命名：mv apache-zookeeper-3.9.7-bin zookeeper
+文件夹授权：sudo chown -R dsj_admin:dsj_admin /usr/local/bigdata/zookeeper
+检查：
+ls -ld /usr/local/bigdata/zookeeper
+ll /usr/local/bigdata/zookeeper 
+
+4.3 配置 ZooKeeper 环境变量
+编辑：sudo vi /etc/profile.d/bigdata.sh
+在已有环境变量配置中增加：
+# ==========================================
+# ZooKeeper 环境变量
+# ==========================================
+
+export ZOOKEEPER_HOME=/usr/local/bigdata/zookeeper
+
+export PATH=$PATH:$ZOOKEEPER_HOME/bin
+
+注意：不要覆盖之前已经配置的 Hadoop、Java、Hive、Spark 等环境变量。
+使配置生效：source /etc/profile.d/bigdata.sh
+验证：
+echo $ZOOKEEPER_HOME
+zkServer.sh version
+
+4.4 配置 ZooKeeper
+进入配置目录：cd $ZOOKEEPER_HOME/conf
+复制官方模板：cp zoo_sample.cfg zoo.cfg
+这里复制的是 ZooKeeper 自己的模板，不涉及复制 Hadoop 配置文件。
+编辑：vi zoo.cfg
+修改为：
+# ==========================================
+# ZooKeeper 基础配置
+# ==========================================
+
+# 客户端连接端口
+clientPort=2181
+
+# 数据快照保存目录
+dataDir=/data/zookeeper/data
+
+# 事务日志保存目录
+dataLogDir=/data/zookeeper/logs
+
+# 心跳时间间隔，单位毫秒
+tickTime=2000
+
+# 初始化连接允许的心跳次数
+initLimit=10
+
+# Leader 与 Follower 之间允许的心跳次数
+syncLimit=5
+
+# 客户端最大连接数，0 表示不限制
+maxClientCnxns=0
+
+# 客户端会话超时时间
+minSessionTimeout=4000
+
+# 客户端最大会话超时时间
+maxSessionTimeout=40000
+
+这里采用单机 ZooKeeper 模式，因此暂时不配置 server.1 等集群节点参数。
+
+4.5 启动 ZooKeeper
+启动之前先解决可能遇到的一个权限问题：
+事务日志		/data/zookeeper/logs		保存 ZooKeeper 数据变更事务
+服务运行日志	/usr/local/bigdata/zookeeper/logs	保存启动输出、运行日志等
+你配置的 dataLogDir 只控制事务日志，并不控制 zkServer.sh 启动脚本输出的 .out 文件
+执行如下命令【对这个目录】：
+sudo mkdir -p /usr/local/bigdata/zookeeper/logs
+sudo chown -R dsj_admin:dsj_admin /usr/local/bigdata/zookeeper/logs
+
+启动：zkServer.sh start
+查看状态：zkServer.sh status
+正常应该显示：Mode: standalone
+查看进程：jps
+应该出现：QuorumPeerMain
+
+4.6 测试 ZooKeeper
+连接客户端：zkCli.sh -server master:2181
+进入客户端后执行：ls /
+创建测试节点：create /test "hello zookeeper"
+查询：get /test
+应该得到：hello zookeeper
+删除：delete /test
+退出：quit
+至此 ZooKeeper 部署完成。
+
+五、部署 HBase 2.6.7
+5.1 创建 HBase 目录
+创建目录：
+sudo mkdir -p /data/hbase/logs
+sudo mkdir -p /data/hbase/tmp
+sudo mkdir -p /data/hbase/tmp/pids
+sudo chown -R dsj_admin:dsj_admin /data/hbase
+
+
+目录	用途
+/data/hbase/logs	HBase 运行日志
+/data/hbase/tmp	HBase 临时文件
+/data/hbase/tmp/pids	HBase 进程 PID 文件
+
+5.2 下载 HBase
+进入软件目录：cd /usr/local/bigdata
+下载：wget https://archive.apache.org/dist/hbase/2.6.7/hbase-2.6.7-hadoop3-bin.tar.gz
+解压：tar -zxvf hbase-2.6.7-hadoop3-bin.tar.gz
+重命名：mv hbase-2.6.7-hadoop3 hbase
+授权：sudo chown -R dsj_admin:dsj_admin /usr/local/bigdata/hbase
+检查：ll /usr/local/bigdata/hbase
+
+5.3 配置 HBase 环境变量
+编辑：sudo vi /etc/profile.d/bigdata.sh
+增加：
+# ==========================================
+# HBase 环境变量
+# ==========================================
+
+export HBASE_HOME=/usr/local/bigdata/hbase
+
+export PATH=$PATH:$HBASE_HOME/bin
+
+使配置生效：source /etc/profile.d/bigdata.sh
+验证：
+echo $HBASE_HOME
+hbase version
+
+5.4 配置 HBase 环境文件
+编辑：vi $HBASE_HOME/conf/hbase-env.sh
+增加或修改以下配置：
+# ==========================================
+# Java 环境
+# ==========================================
+
+# 指定 JDK 17
+export JAVA_HOME=/usr/local/bigdata/jdk
+
+
+# ==========================================
+# Hadoop 环境
+# ==========================================
+
+# 引用已有 Hadoop 安装目录
+export HADOOP_HOME=/usr/local/bigdata/hadoop
+
+# 引用 Hadoop 原有配置目录
+export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+
+# 将 Hadoop 配置目录加入 HBase ClassPath
+export HBASE_CLASSPATH=$HADOOP_CONF_DIR
+
+
+# ==========================================
+# ZooKeeper 环境
+# ==========================================
+
+# 使用外部独立部署的 ZooKeeper
+# 不让 HBase 自己启动和管理 ZooKeeper
+export HBASE_MANAGES_ZK=false
+
+
+# ==========================================
+# HBase 日志与 PID 目录
+# ==========================================
+
+# HBase 日志目录
+export HBASE_LOG_DIR=/data/hbase/logs
+
+# HBase PID 文件目录
+export HBASE_PID_DIR=/data/hbase/tmp/pids
+
+
+这里有一个非常重要的设计：
+我们没有执行：
+cp $HADOOP_HOME/etc/hadoop/core-site.xml $HBASE_HOME/conf/
+cp $HADOOP_HOME/etc/hadoop/hdfs-site.xml $HBASE_HOME/conf/
+而是通过：
+export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+export HBASE_CLASSPATH=$HADOOP_CONF_DIR
+让 HBase 直接引用 Hadoop 已有配置。
+这样以后 Hadoop 修改 HDFS 地址、存储参数等配置时，HBase 也可以读取同一份配置，不需要维护两套文件。
+
+5.5 配置 HBase 核心配置文件
+编辑：vi $HBASE_HOME/conf/hbase-site.xml
+写入：
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+
+    <!-- ====================================== -->
+    <!-- HBase 基础配置 -->
+    <!-- ====================================== -->
+
+    <!-- HBase 在 HDFS 中的数据存储目录 -->
+    <property>
+        <name>hbase.rootdir</name>
+        <value>hdfs://master:8020/hbase</value>
+    </property>
+
+    <!--
+        false：独立模式
+        true：分布式模式
+        当前使用单机伪分布式，因此设置为 true
+    -->
+    <property>
+        <name>hbase.cluster.distributed</name>
+        <value>true</value>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- ZooKeeper 配置 -->
+    <!-- ====================================== -->
+
+    <!-- ZooKeeper 服务地址 -->
+    <property>
+        <name>hbase.zookeeper.quorum</name>
+        <value>master</value>
+    </property>
+
+    <!-- ZooKeeper 客户端端口 -->
+    <property>
+        <name>hbase.zookeeper.property.clientPort</name>
+        <value>2181</value>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- HBase 临时目录 -->
+    <!-- ====================================== -->
+
+    <!-- HBase 临时文件存储目录 -->
+    <property>
+        <name>hbase.tmp.dir</name>
+        <value>/data/hbase/tmp</value>
+    </property>
+
+
+</configuration>
+
+这里有几个重要参数需要理解：
+参数			作用
+hbase.rootdir		指定 HBase 在 HDFS 中的数据库存储位置
+hbase.cluster.distributed	开启分布式运行模式
+hbase.zookeeper.quorum	指定 ZooKeeper 地址
+hbase.zookeeper.property.clientPort	ZooKeeper 客户端端口
+hbase.tmp.dir		HBase 本地临时目录
+
+特别注意：
+这里没有重复配置：
+<property>
+    <name>fs.defaultFS</name>
+    <value>hdfs://master:8020</value>
+</property>
+因为这个参数已经在 Hadoop 的 core-site.xml 中配置了，HBase 会通过之前指定的 Hadoop 配置目录读取它。
+同样，不需要重复维护 hdfs-site.xml。
+
+5.6 配置 RegionServer 节点
+编辑：vi $HBASE_HOME/conf/regionservers
+写入：master
+这个文件用于指定 HBase 启动哪些 RegionServer。
+当前只有一台机器，因此只有：master
+后续扩展真正的分布式集群时，可以改成：
+master
+worker1
+worker2
+
+注意：这里是 HBase 的 RegionServer 节点列表，不是 Hadoop 的 workers 文件。
+
+六、启动 HBase
+6.1 检查启动前的依赖
+HBase 依赖 Hadoop HDFS 和 ZooKeeper。
+先检查 HDFS：jps
+应该能看到：
+NameNode
+DataNode
+SecondaryNameNode
+
+检查 HDFS：hdfs dfsadmin -report
+检查 ZooKeeper：zkServer.sh status
+应该显示：Mode: standalone
+
+6.2 创建 HBase HDFS 数据目录
+执行：hdfs dfs -mkdir -p /hbase
+检查：hdfs dfs -ls /
+应该看到：hbase
+确认当前运行 HBase 的用户 dsj_admin 对该目录具有写入权限。
+查看：hdfs dfs -ls -d /hbase
+如果目录不是 dsj_admin 所有，并且当前用户没有写权限，可以使用 HDFS 超级用户调整目录所有权：
+hdfs dfs -chown -R dsj_admin:supergroup /hbase
+
+6.3 启动 HBase
+执行：start-hbase.sh
+这个命令会根据配置启动：
+- HMaster
+- RegionServer
+由于我们设置了：export HBASE_MANAGES_ZK=false
+所以它不会再启动一套 ZooKeeper，而是使用之前独立启动的 ZooKeeper 服务。
+
+6.4 检查 HBase 进程
+执行：jps
+正常情况下应该看到：
+NameNode
+DataNode
+SecondaryNameNode
+QuorumPeerMain
+HMaster
+HRegionServer
+Jps
+
+核心服务启动成功
+其中：
+进程		作用
+QuorumPeerMain	ZooKeeper
+HMaster		HBase 主节点
+HRegionServer	HBase 数据服务节点
+
+6.5 查看 HBase Web 管理界面
+HMaster管理页面： http://192.168.79.10:16010
+RegionServer 管理页面 ：http://192.168.79.10:16030
+注意：当前环境的 IP 是 192.168.79.10，如果实际虚拟机 IP 不同，以实际 IP 为准。
+
+七、HBase 功能测试
+不能只看进程启动成功，还要真正测试 HBase 建表、写入、查询和删除数据。
+7.1 进入 HBase Shell
+执行：hbase shell
+正常进入后会看到：hbase:001:0>
+
+7.2 查看 HBase 状态
+status
+查看版本：
+version
+查看当前数据库中的表：
+list
+
+7.3 创建命名空间
+create_namespace 'test'
+查看：list_namespace
+
+7.4 创建数据表
+创建学生信息表：create 'test:student', 'info'
+这里：
+- test：命名空间。
+- student：表名。
+- info：列族。
+查看表：list
+查看表结构：describe 'test:student'
+
+7.5 写入数据
+插入第一条数据：
+put 'test:student', '1001', 'info:name', '张三'
+put 'test:student', '1001', 'info:age', '22'
+put 'test:student', '1001', 'info:sex', '男'
+
+插入第二条数据：
+put 'test:student', '1002', 'info:name', '李四'
+put 'test:student', '1002', 'info:age', '23'
+put 'test:student', '1002', 'info:sex', '女'
+
+7.6 查询数据
+查询全部数据：scan 'test:student'
+查询指定行：get 'test:student', '1001'
+查询指定列：get 'test:student', '1001', 'info:name'
+
+7.7 删除数据
+删除指定列：delete 'test:student', '1001', 'info:sex'
+删除整张表：
+disable 'test:student'
+drop 'test:student'
+删除命名空间：drop_namespace 'test'
+退出：exit
+
+7.8 验证 HDFS 数据
+回到 Linux 终端：
+hdfs dfs -ls -R /hbase
+你应该能看到 HBase 创建的内部目录，例如：
+/hbase/.tmp
+/hbase/MasterProcWALs
+/hbase/data
+/hbase/archive
+具体目录会随着 HBase 运行状态和版本有所不同。
+这说明 HBase 已经能够正常使用 HDFS 存储数据。
+
+八、查看运行日志
+本课所有日志都放在独立的数据目录中。
+ZooKeeper 日志：ls -lh /data/zookeeper/logs
+HBase 日志：ls -lh /data/hbase/logs
+查看 HBase 最新日志：tail -n 100 /data/hbase/logs/*master*.log
+查看 RegionServer 日志：tail -n 100 /data/hbase/logs/*regionserver*.log
+实时跟踪日志：tail -f /data/hbase/logs/*master*.log
+
+九、服务停止与启动顺序
+后续每次启动大数据环境，建议按照以下顺序。
+启动顺序
+1. 启动 Hadoop HDFS
+   start-dfs.sh
+2. 启动 ZooKeeper
+   zkServer.sh start
+3. 启动 HBase
+   start-hbase.sh
+
+停止顺序
+1. 停止 HBase
+   stop-hbase.sh
+2. 停止 ZooKeeper
+   zkServer.sh stop
+3. 停止 Hadoop HDFS
+   stop-dfs.sh

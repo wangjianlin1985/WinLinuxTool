@@ -1,0 +1,112 @@
+企业级大数据平台部署、开发与运维实战课程（新版30课）
+这次重新规划整套课程，把之前遗漏的 HBase、Spark Structured Streaming 补充进来，同时保留 Hadoop、Hive、Spark、Kafka、Flink、Doris、ClickHouse、StarRocks、Iceberg、Kubernetes 等核心技术。
+
+课程按照实际企业大数据平台的技术体系组织，不是简单罗列软件，而是从基础环境、分布式存储、离线计算、实时计算，一直学习到数据仓库、数据湖、自动化运维和综合项目。
+第一阶段：Hadoop 大数据基础平台（第1～5课）
+基础架构与分布式存储
+课次	课程标题	核心学习内容
+第1课	大数据平台架构与环境准备	大数据生态、技术选型、Linux 集群规划、网络与环境准备
+第2课	Hadoop 分布式集群部署	HDFS、NameNode、DataNode、SecondaryNameNode
+第3课	Hadoop YARN 集群管理	ResourceManager、NodeManager、ApplicationMaster、资源调度
+第4课	MapReduce 分布式计算	Map、Reduce、Shuffle、任务执行与排错
+第5课	Hive 数据仓库部署与开发	Metastore、MySQL、HiveServer2、Hive SQL、数据仓库基础
+
+第二阶段：Spark 分布式计算平台（第6～10课）
+离线计算与 Kubernetes 集成
+课次	课程标题	核心学习内容
+第6课	Spark 基础架构与部署	Driver、Executor、Cluster Manager、Spark 运行模式
+第7课	Spark Standalone 集群部署	Master、Worker、任务调度、集群管理
+第8课	Spark SQL 与 PySpark	DataFrame、SQL、Python 数据处理、Parquet
+第9课	Spark on Kubernetes	Spark 任务提交到 K8s、Driver Pod、Executor Pod、RBAC
+第10课	Spark 企业级开发与性能优化	RDD、DataFrame 优化、Shuffle、缓存、分区、资源调优
+
+第三阶段：分布式数据库与消息队列（第11～15课）
+NoSQL 与实时数据基础设施
+课次	课程标题	核心学习内容
+第11课	HBase 分布式 NoSQL 数据库部署	HMaster、RegionServer、ZooKeeper、HDFS
+第12课	HBase 数据模型与开发实战	Namespace、Table、Region、RowKey、Java API、Spark 集成
+第13课	Kafka 消息队列集群部署	Broker、Topic、Partition、Producer、Consumer
+第14课	Kafka 高可用与企业级运维	KRaft、Replication、ISR、Consumer Group、故障恢复
+第15课	Kafka 与大数据平台集成	Spark、Flink、HDFS、HBase 数据接入与传输
+
+第四阶段：实时流处理计算平台（第16～20课）
+实时计算与流处理
+课次	课程标题	核心学习内容
+第16课	Spark Structured Streaming 实时流处理	Kafka 数据源、流式 DataFrame、实时过滤与聚合
+第17课	Spark 实时计算进阶与故障恢复	Window、Watermark、Checkpoint、Exactly-once 语义
+第18课	Apache Flink 基础架构与集群部署	JobManager、TaskManager、Standalone、YARN、Kubernetes
+第19课	Flink DataStream API 与实时计算开发	Source、Transformation、Sink、KeyBy、窗口计算
+第20课	Flink 高级特性与企业级运维	状态管理、Checkpoint、Savepoint、反压、故障恢复
+
+第五阶段：现代数据仓库与 OLAP 分析（第21～24课）
+MPP 分析数据库与 SQL 查询引擎
+课次	课程标题	核心学习内容
+第21课	Apache Doris 分布式分析数据库部署	FE、BE、Broker、分布式查询、数据导入
+第22课	ClickHouse 列式数据库部署与开发	MergeTree、分区、索引、物化视图、SQL 分析
+第23课	StarRocks 实时数据仓库部署	FE、BE、Shared-nothing、实时数据分析、物化视图
+第24课	Trino 分布式 SQL 查询引擎	Coordinator、Worker、Catalog、跨数据源联邦查询
+
+第六阶段：数据湖与数据集成（第25～27课）
+现代数据架构
+课次	课程标题	核心学习内容
+第25课	MinIO 对象存储与数据湖基础	S3 API、Bucket、对象存储、分布式存储架构
+第26课	Apache Iceberg 数据湖表格式	Metadata、Snapshot、Schema Evolution、Time Travel、Spark 集成
+第27课	Apache SeaTunnel 数据集成平台	数据源连接、批量同步、增量同步、数据迁移、CDC
+
+第七阶段：大数据平台调度、监控与综合运维（第28～30课）
+企业级平台建设与项目实战
+课次	课程标题	核心学习内容
+第28课	DolphinScheduler 工作流调度平台	Master、Worker、任务依赖、定时调度、失败重试、工作流管理
+第29课	大数据平台监控、安全与自动化运维	Prometheus、Grafana、日志管理、权限控制、集群监控、故障排查
+第30课	企业级大数据平台综合项目实战	Hadoop、Hive、Spark、Kafka、Flink、HBase、Doris、Iceberg 综合集成
+
+
+企业级大数据平台部署与运维课程（建议30课）
+我把课程分成六个阶段。
+第一阶段：大数据基础与 Hadoop 生态（1～5课）
+课程	课程名称	核心内容
+第1课	大数据平台架构与环境准备	大数据生态、部署架构、资源规划
+第2课	Hadoop 分布式集群部署	HDFS、NameNode、DataNode
+第3课	Hadoop YARN 集群管理	ResourceManager、NodeManager
+第4课	MapReduce 分布式计算	Map、Reduce、任务执行与排错
+第5课	Hive 数据仓库部署	Metastore、MySQL、Hive SQL
+
+第二阶段：Spark 分布式计算（6～10课）
+课程	课程名称	核心内容
+第6课	Spark 基础架构与部署	Driver、Executor、Cluster Manager
+第7课	Spark Standalone 集群部署	Master、Worker、任务调度
+第8课	Spark SQL 与 PySpark	DataFrame、SQL、Python 数据处理
+第9课	Spark on Kubernetes	Spark 任务提交到 K8s
+第10课	Spark 集群运维与性能优化	Executor、内存、Shuffle、故障排查
+
+第三阶段：Kafka 与 Flink 实时计算（11～16课）
+课程	课程名称	核心内容
+第11课	Kafka 集群部署	Broker、Topic、Partition
+第12课	Kafka 高可用与集群运维	副本、ISR、故障恢复
+第13课	Flink 基础架构与部署	JobManager、TaskManager
+第14课	Flink 实时计算实战	DataStream、窗口、状态计算
+第15课	Flink Checkpoint 与高可用	状态恢复、Savepoint
+第16课	Flink Kubernetes 部署	Flink Operator、Session、Application
+
+第四阶段：现代数据仓库与 OLAP（17～21课）
+课程	课程名称	核心内容
+第17课	Apache Doris 集群部署	FE、BE、数据分片
+第18课	ClickHouse 集群部署	ReplicatedMergeTree、分布式表
+第19课	StarRocks 集群部署	FE、BE、存算架构
+第20课	Trino 分布式 SQL 查询	Coordinator、Worker、Catalog
+第21课	Hive、Doris、ClickHouse 运维	性能优化、数据导入、故障排查
+
+第五阶段：现代数据湖仓与数据集成（22～25课）
+课程	课程名称	核心内容
+第22课	MinIO 对象存储部署	分布式存储、Bucket、权限
+第23课	Parquet 与 Apache Iceberg	数据文件、表格式、元数据
+第24课	Spark + Iceberg 湖仓实战	数据写入、更新、查询
+第25课	SeaTunnel 数据集成	MySQL、Kafka、Hive、Doris 数据同步
+
+第六阶段：企业级部署运维与综合项目（26～30课）
+课程	课程名称	核心内容
+第26课	DolphinScheduler 任务调度	工作流、定时任务、依赖调度
+第27课	Superset 数据可视化	数据源、仪表盘、报表
+第28课	大数据平台 Kubernetes 运维	StatefulSet、Operator、持久化存储
+第29课	大数据集群监控与故障排查	Prometheus、Grafana、日志、告警
+第30课	企业级大数据综合项目	完整数据采集、计算、存储、分析平台

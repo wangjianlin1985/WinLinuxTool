@@ -1,0 +1,328 @@
+从第16课开始，我们要进入 Kubernetes 的运维监控阶段。
+在实际生产环境中，光是让 Kubernetes 集群正常运行还不够，我们还必须能够回答下面这些问题：
+- 集群现在运行得是否正常？
+- 哪个节点 CPU 或内存使用率过高？
+- 哪个 Pod 占用了大量资源？
+- Pod 为什么突然重启？
+- 某个 Java 应用为什么访问不了？
+- 容器报错了，如何查看历史日志？
+- 能不能通过网页仪表盘实时查看整个集群的运行情况？
+这些问题就是本课要解决的内容。
+
+一、本课学习目标
+学完本课，你应该能够：
+1. 理解 Kubernetes 监控体系的组成。
+2. 掌握 Metrics Server 的作用和使用。
+3. 安装 Prometheus 监控系统。
+4. 安装 Grafana 可视化监控平台。
+5. 查看 Node、Pod、Deployment 的资源使用情况。
+6. 掌握 Kubernetes Pod 日志查看方法。
+7. 理解容器日志的存储位置。
+8. 学习 Loki 集中式日志管理。
+9. 能够通过 Grafana 查看监控指标和应用日志。
+
+二、先理解 Kubernetes 监控体系
+先看一下我们准备搭建的监控架构。整个体系主要由五个部分组成。
+组件		主要作用
+Metrics Server	收集节点和 Pod 的 CPU、内存指标
+Prometheus	采集、存储和查询监控指标
+Grafana		将监控数据展示成图表
+Loki		集中存储和查询日志
+日志采集组件	将各节点容器日志发送到 Loki
+
+1. Metrics Server
+这是一个轻量级的 Kubernetes 资源指标采集组件。
+主要采集：
+- Node CPU 使用率
+- Node 内存使用量
+- Pod CPU 使用率
+- Pod 内存使用量
+例如查看节点资源使用情况：kubectl top nodes
+查看所有命名空间的 Pod 资源使用情况：kubectl top pods -A
+查看 default 命名空间的 Pod：kubectl top pods -n default
+注意：Metrics Server 主要提供近期资源使用指标，不是长期历史监控数据库。
+它还为之前第12课学习的 HPA 提供资源指标。
+
+2. Prometheus
+Kubernetes 生产环境中非常常见的监控系统。
+它主要负责：
+- 定时采集监控指标。
+- 保存 CPU、内存、网络等历史数据。
+- 查询历史监控数据。
+- 设置监控规则和告警。
+- 监控 Kubernetes 节点和应用。
+例如：
+假设你的 k8s-node1 内存使用率突然达到 95%。
+Prometheus 可以记录这一变化，并通过查询分析过去一段时间的内存变化趋势。
+
+3. Grafana
+主要负责将监控数据可视化。
+Prometheus 负责采集和存储数据，Grafana 负责展示数据。
+例如可以制作这样的监控面板：
+你可以在网页中看到：
+- 集群 CPU 使用率。
+- 集群内存使用率。
+- 每个节点的资源使用情况。
+- Pod 数量和运行状态。
+- 网络流量。
+- 容器重启次数。
+以后管理 Kubernetes 集群，不需要每次都敲命令，打开 Grafana 就可以观察集群整体状态。
+
+4. Loki
+负责集中收集和查询 Kubernetes 日志。
+假设你的集群有三个节点：
+- k8s-master
+- k8s-node1
+- k8s-node2
+三个节点上都运行着不同的 Pod。
+如果某个 Java 服务出现异常，你需要分别登录节点查看日志，非常麻烦。
+Loki 可以把多个节点的日志集中起来，再通过 Grafana 统一查询。
+
+5. 日志采集组件
+日志采集组件负责读取各节点上的容器日志，然后发送给 Loki。
+本课可以使用 Grafana Alloy 作为日志采集组件。
+它负责：
+1. 读取容器日志。
+2. 提取 Pod、Namespace、Container 等标签。
+3. 将日志发送到 Loki。
+4. 让 Grafana 能够按照应用和命名空间查询日志。
+
+三、先学习 Kubernetes 自带的监控命令
+在安装 Prometheus 之前，我们先掌握 Kubernetes 自身提供的监控和日志命令。
+这些命令非常重要，即使以后有了 Grafana，也仍然经常使用。
+1. 查看节点资源
+kubectl top nodes
+示例：
+NAME         CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
+k8s-master   350m         18%    1800Mi          45%
+k8s-node1    220m         11%    1200Mi          30%
+k8s-node2    180m          9%    1100Mi          28%
+这里：
+- 350m 表示 350 毫核 CPU，也就是 0.35 核。
+- 1800Mi 表示使用了约 1800 MiB 内存。
+- CPU% 和 MEMORY% 是相对于节点可分配资源计算的。
+实际数值以你的虚拟机配置为准。
+
+2. 查看 Pod 资源
+kubectl top pods -A
+只看某个命名空间：kubectl top pods -n default
+按照 CPU 排序：kubectl top pods -A --sort-by=cpu
+按照内存排序：kubectl top pods -A --sort-by=memory
+
+3. 查看 Pod 运行状态
+kubectl get pods -A -o wide
+查看某个 Pod 的详细信息：kubectl describe pod nginx -n default
+重点关注：
+- Events：事件记录。
+- Restart Count：容器重启次数。
+- State：容器运行状态。
+- Node：Pod 所在节点。
+
+4. 查看 Pod 日志
+kubectl logs nginx
+如果 Pod 有多个容器：kubectl logs nginx -c 容器名称
+查看上一次崩溃前的日志：kubectl logs nginx --previous
+持续实时查看：kubectl logs -f nginx
+查看指定命名空间：kubectl logs -n default nginx
+查看 Deployment 对应的 Pod 日志：kubectl logs deployment/nginx-deploy
+查看最近100行：kubectl logs nginx --tail=100
+查看最近10分钟日志：kubectl logs nginx --since=10m
+
+特别注意： kubectl logs --previous 对排查 CrashLoopBackOff 非常有用，因为它能够查看上一次容器实例退出前的日志。
+
+四、查看 Kubernetes 容器日志的真实存储位置
+你现在的 Kubernetes 使用的是 containerd，而不是 Docker。
+Kubernetes 容器日志通常可以在节点的以下目录找到：
+ls -lh /var/log/containers/
+查看 Pod 日志文件：ls -lh /var/log/pods/
+
+两个目录的关系：
+目录			作用
+/var/log/pods/		保存 Pod 容器日志文件
+/var/log/containers/	通常是指向 Pod 日志文件的符号链接
+
+例如：ls -l /var/log/containers/
+你可能会看到：nginx-xxx_default_nginx-xxx.log
+查看具体日志：tail -f /var/log/containers/日志文件名.log
+注意：日志文件在 Pod 被删除、节点重启或日志轮转后可能发生变化，不能把节点本地日志目录当成可靠的长期日志存储。
+
+五、实战：安装 Prometheus + Grafana
+这一部分是本课最重要的实操内容。
+我们使用 Helm 安装 kube-prometheus-stack。
+它会整合多个监控组件：
+- Prometheus
+- Grafana
+- Node Exporter
+- kube-state-metrics
+- Prometheus Operator
+- Alertmanager
+官方 Chart：kube-prometheus-stack 
+官方项目：https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+
+第一步：检查 Helm
+helm version
+如果没有安装 Helm，需要先安装 Helm 3，我之前安装了4.3.0也可以。
+
+第二步：添加 Helm 仓库
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+更新仓库：helm repo update
+查看监控组件：helm search repo prometheus-community/kube-prometheus-stack
+
+第三步：创建 monitoring 命名空间
+kubectl create namespace monitoring
+查看：kubectl get namespaces
+
+第四步：安装监控系统
+执行：helm install prometheus-stack prometheus-community/kube-prometheus-stack -n monitoring \
+--set prometheus.prometheusSpec.retention=3d
+
+这里解释一下：
+参数		含义
+helm install	安装 Helm 应用
+prometheus-stack	本次安装的 Release 名称
+prometheus-community/kube-prometheus-stack	安装的 Chart
+-n monitoring	安装到 monitoring 命名空间
+retention=3d	Prometheus 数据保留3天
+
+我们目前是学习实验环境，所以先使用较短的数据保留周期。
+注意：这个组件比较多，会占用一定 CPU 和内存。
+你的三节点虚拟机集群如果资源较少，安装后需要留意 Pod 是否出现 Pending 或 OOMKilled。
+
+第五步：查看安装状态
+kubectl get pods -n monitoring
+查看服务：kubectl get svc -n monitoring
+查看部署：kubectl get deployments -n monitoring
+查看所有监控组件：kubectl get all -n monitoring
+等待相关 Pod 全部进入 Running 状态。
+如果没有正常运行：kubectl get pods -n monitoring -o wide
+然后使用：kubectl describe pod Pod名称 -n monitoring
+排查问题。
+
+第六步：访问 Grafana
+先查看 Grafana 服务：kubectl get svc -n monitoring
+找到 Grafana 对应的 Service，通常名称为：prometheus-stack-grafana
+执行端口转发：kubectl port-forward svc/prometheus-stack-grafana 3000:80 -n monitoring
+然后在 Windows 浏览器访问：
+http://192.168.79.130:3000
+这里使用你的 Kubernetes Master 地址。
+
+Grafana 默认用户名：admin
+获取初始密码：kubectl get secret prometheus-stack-grafana -n monitoring -o jsonpath="{.data.admin-password}" | base64 -d
+复制输出的密码登录。
+
+登录后，你就能看到 Kubernetes 的监控面板。
+可以查看：
+- Cluster 总体状态。
+- Node CPU 和内存。
+- Pod CPU 和内存。
+- Namespace 资源情况。
+- 容器重启次数。
+注意： kubectl port-forward 需要保持运行，关闭终端后访问就会中断。
+这是实验环境的临时访问方式，后续可以学习通过 Ingress 暴露 Grafana。
+
+六、实战：Loki 集中式日志管理
+接下来学习日志集中管理。
+
+前面我们使用：kubectl logs nginx  查看日志。但如果集群有几十个甚至几百个 Pod，每次手动查日志就很麻烦了。因此，我们引入 Loki。
+整个流程：
+k8s-master              k8s-node1               k8s-node2
+    |                       |                       |
+  Pod日志                  Pod日志                 Pod日志
+    |                       |                       |
+    +---------- Alloy 日志采集组件 -----------------+
+                            |
+                            v
+                          Loki
+                            |
+                            v
+                         Grafana
+                            |
+                            v
+                      网页统一查询日志
+
+1. Loki 和 Prometheus 有什么区别？
+对比		Prometheus		Loki
+主要用途		指标监控			日志管理
+数据类型		CPU、内存、网络等指标	文本日志
+查询方式		PromQL			LogQL
+数据展示		Grafana			Grafana
+典型用途		查看资源使用率		排查应用报错
+
+例如：
+Prometheus 可以告诉你：某个 Pod 的 CPU 使用率突然达到 90%。
+Loki 可以帮助你继续调查：这个 Pod 为什么突然出现大量错误日志？
+两者配合起来，就可以更好地排查问题。
+
+2. 为什么使用 Alloy，而不是 Promtail？
+这里有一个需要注意的技术变化：
+Grafana Promtail 已于2026年3月进入 EOL（停止维护阶段），新的 Kubernetes 日志采集实验建议使用 Grafana Alloy。
+
+Alloy 可以负责：
+- 自动发现 Kubernetes Pod。
+- 收集容器日志。
+- 提取 Namespace、Pod、Container 等信息。
+- 将日志发送给 Loki。
+
+3. Loki 安装前需要准备什么？
+添加 Grafana Helm 仓库：helm repo add grafana https://grafana.github.io/helm-charts
+添加 Loki 社区 Chart 仓库：helm repo add grafana-community https://grafana-community.github.io/helm-charts
+更新仓库：helm repo update
+这里特别注意：2026年3月16日起，开源 Loki Helm Chart 已迁移到 grafana-community/helm-charts，不要再照搬旧教程中的 Chart 仓库地址。
+
+Loki 的部署模式、存储后端和 Alloy 配置需要配套设置，因此本课先理解这套架构，再进行安装和日志采集验证。
+官方实操文档：
+- Loki 官方入门文档：https://grafana.com/docs/loki/latest/get-started/
+- Kubernetes 日志采集实战：https://grafana.com/docs/loki/latest/send-data/k8s-monitoring-helm/
+- Grafana Alloy 官方文档：https://grafana.com/docs/alloy/latest/
+
+七、Prometheus 监控数据查询入门
+Prometheus 有自己的查询语言，叫做 PromQL。
+这一部分不需要马上掌握所有语法，先认识几个常用查询。
+PromQL					作用
+up					查看监控目标是否正常
+node_memory_MemAvailable_bytes		查看节点可用内存
+node_cpu_seconds_total			查看节点 CPU 累计时间
+kube_pod_info				查看 Pod 信息
+kube_pod_container_status_restarts_total	查看容器重启次数
+
+例如：up	可以查看 Prometheus 监控目标的状态。
+sum(rate(node_cpu_seconds_total{mode!="idle"}[5m]))
+可以计算所有节点最近5分钟的非空闲 CPU 使用时间速率之和。
+注意：PromQL 的查询结果需要结合指标含义理解，不能简单把这个结果当成百分比。
+
+八、本课知识总结
+Kubernetes 监控与日志管理体系
+
+Kubernetes 集群
+Node / Pod / Container / Application
+
+监控指标			日志采集
+Metrics Server		Grafana Alloy
+↓			↓
+Prometheus		Loki
+↓			↓
+Grafana			Grafana
+
+Grafana 统一可视化入口
+监控指标 + 日志查询 + 仪表盘
+
+知识点		本课需要掌握
+Metrics Server	会使用 kubectl top
+Prometheus	理解指标采集和 PromQL
+Grafana		能登录并查看监控面板
+Loki		理解集中式日志管理
+Alloy		理解日志采集流程
+kubectl logs	熟练查看容器日志
+
+九、第16课课后练习任务
+建议你在自己的三节点集群上完成以下任务。第16课实操清单
+0/8 已完成
+
+[ ] 检查 Metrics Server 是否正常，执行 kubectl top nodes。
+[ ] 执行 kubectl top pods -A，查看所有 Pod 资源。
+[ ] 查看 nginx Pod 的实时日志和历史日志。
+[ ] 检查 /var/log/containers/ 目录。
+[ ] 检查 Helm 是否安装。
+[ ] 使用 Helm 安装 kube-prometheus-stack。
+[ ] 登录 Grafana，查看 Kubernetes 监控仪表盘。
+[ ] 理解 Loki + Alloy 的集中式日志采集架构。

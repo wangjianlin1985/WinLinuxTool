@@ -1,0 +1,67 @@
+排查日志：初始化执行报错了，crictl 是 Kubernetes 提供的 CRI 命令行客户端
+安装它查看和管理容器运行时中的 Pod、容器及日志。
+安装： dnf install -y cri-tools --disableexcludes=kubernetes   查看版本：crictl --version
+
+配置默认 containerd 地址：这样以后就不需要每次输入 --runtime-endpoint 了：
+cat > /etc/crictl.yaml <<'EOF'
+runtime-endpoint: unix:///run/containerd/containerd.sock
+image-endpoint: unix:///run/containerd/containerd.sock
+timeout: 10
+debug: false
+EOF
+
+完成后执行：
+crictl ps -a
+发现都是空的 没创建一个容器。
+
+第一步确认静态 Pod 配置文件是否存在： ls -lh /etc/kubernetes/manifests/
+etcd.yaml
+kube-apiserver.yaml
+kube-controller-manager.yaml
+kube-scheduler.yaml
+这个4个文件都在的
+
+第二步检查 kubelet 最近的错误日志
+journalctl -u kubelet -n 100 --no-pager
+发现错误pause 镜像拉取失败：
+RunPodSandbox from runtime service failed
+failed to pull image "registry.k8s.io/pause:3.10.2"
+Head "https://us-west2-docker.pkg.dev/..."
+dial tcp 64.233.187.82:443: connect: connection refused
+
+为什么指定了阿里云镜像仓库还是失败？
+--image-repository=registry.aliyuncs.com/google_containers
+这个参数只影响 kubeadm 管理的 Kubernetes 控制平面镜像，不会自动修改 containerd 的全局镜像仓库配置。
+而 pause 镜像属于 containerd 创建 Pod Sandbox 时使用的基础镜像，其默认地址仍然是:
+registry.k8s.io/pause:3.10.2
+
+确认 containerd 的 pause 镜像配置: grep -n -i -E 'sandbox|pause' /etc/containerd/config.toml
+sandbox = 'registry.k8s.io/pause:3.10.2' 改成 sandbox = 'registry.aliyuncs.com/google_containers/pause:3.10.2'
+修改后执行： grep -n 'sandbox =' /etc/containerd/config.toml
+没问题后重启containerd：systemctl restart containerd
+然后检查状态：systemctl status containerd --no-pager
+
+拉取镜像：crictl pull registry.aliyuncs.com/google_containers/pause:3.10.2
+确认Sandbox镜像配置：containerd config dump | grep -n -i -E 'sandbox|pause'
+清理本节点的 Kubernetes 初始化状态：kubeadm reset -f
+检查一下 Kubernetes 相关端口是否被占用：
+ss -lntup | grep -E ':(6443|2379|2380|10250|10257|10259)\b'
+这些是 Master 常见的 Kubernetes 端口：
+端口	用途
+6443	kube-apiserver
+2379	etcd 客户端通信
+2380	etcd 节点间通信
+10250	kubelet API
+10257	kube-controller-manager
+10259	kube-scheduler
+判断方法：
+- 没有任何输出：这些端口当前没有监听进程。
+- 有输出：查看对应进程，先不要直接杀进程。
+注意：10250 是 kubelet 的端口。如果 kubelet 仍在运行，这个端口可能还会被监听，不一定代表清理失败。
+
+然后还要关闭SELinux后才可以初始化集群kubeadm init 成功了如下：
+Your Kubernetes control-plane has initialized successfully!
+To start using your cluster, you need to run the following as a regular user:
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config

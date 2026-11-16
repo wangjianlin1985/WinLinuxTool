@@ -1,0 +1,18 @@
+编辑 /etc/fstab，添加：
+192.168.79.130:/export/share /mnt/nfs_system nfs rw,soft,timeo=30,retrans=3,_netdev 0 0
+
+
+参数说明：
+| `rw` | 允许读写 |
+| `soft` | 请求重试达到限制后返回错误，避免无限等待，但写入可能存在数据损坏风险 |
+| `timeo=30` | RPC 请求超时参数，单位为 0.1 秒，即 3 秒 |
+| `retrans=3` | 设置请求超时后的重试次数参数 |
+| `_netdev` | 标记为网络文件系统，便于系统处理启动时的挂载顺序 |
+| `0 0` | 不使用 dump 备份，不在启动时执行 fsck 检查 |
+
+测试挂载：
+mkdir -p /mnt/nfs_system
+mount -a
+df -hT
+
+注意：soft`适合希望请求失败时及时返回错误的场景，但不保证所有操作都在固定时间内结束；重要文件写入通常优先考虑 hard。

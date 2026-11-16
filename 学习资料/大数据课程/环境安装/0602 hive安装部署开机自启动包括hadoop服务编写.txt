@@ -1,0 +1,575 @@
+ 四、安装 Hive 4.1.0
+4.1 为什么选择 Hive 4.1.0？
+这里特别说明一下版本选择。
+截至目前，Hive 已经发布 4.2.1，但是：
+- Hive 4.1.x 支持 JDK 17。
+- Hive 4.2.x 要求最低 JDK 21。
+- Hive 4.1.0 官方发布信息列出的 Hadoop 测试组合是 Hadoop 3.4.1。
+因此，为了延续我们已经确定的 JDK 17 环境，本课程继续使用 Hive 4.1.0，不为了追新版本而改变整个大数据平台的 JDK。 
+
+另外，我们的 Hadoop 是 3.5.0。Hive 4.1.x 声明支持 Hadoop 3.x，Hadoop 官方也规定同一主版本内维持相关应用的二进制兼容性。
+不过，Hive 4.1.0 与 Hadoop 3.5.0 并非官方发布页列出的精确测试组合，后续需要通过实际任务验证。 
+
+4.2 下载 Hive
+切换 root：su -
+进入目录：cd /usr/local/bigdata
+下载：wget https://archive.apache.org/dist/hive/hive-4.1.0/apache-hive-4.1.0-bin.tar.gz
+解压：tar -zxf apache-hive-4.1.0-bin.tar.gz
+重命名：mv apache-hive-4.1.0-bin hive
+修改目录所有者：chown -R dsj_admin:dsj_admin /usr/local/bigdata/hive
+创建日志目录：
+mkdir -p /usr/local/bigdata/hive/logs
+chown -R dsj_admin:dsj_admin /usr/local/bigdata/hive/logs
+
+最终目录：
+/usr/local/bigdata/hive/
+├── bin/
+├── conf/
+├── lib/
+├── logs/
+└── scripts/
+
+
+4.3 安装 MySQL JDBC 驱动
+这一步非常重要。Hive 本身不会直接使用 MySQL 客户端连接数据库，而是通过 JDBC 驱动连接 MySQL。
+我们使用 MySQL Connector/J 8.4.0。
+下载：
+cd /usr/local/bigdata/hive/lib
+wget https://repo.maven.apache.org/maven2/com/mysql/mysql-connector-j/8.4.0/mysql-connector-j-8.4.0.jar
+检查：ls -lh mysql-connector-j-8.4.0.jar
+确认文件存在。
+
+4.4 配置 Hive 环境变量
+编辑：vi /etc/profile.d/bigdata.sh
+在之前已有配置的基础上，追加以下内容，不要覆盖之前的 Hadoop 配置：
+
+# ==========================================
+# Hive Environment
+# ==========================================
+
+export HIVE_HOME=/usr/local/bigdata/hive
+
+export HIVE_CONF_DIR=$HIVE_HOME/conf
+
+export HADOOP_MAPRED_HOME=/usr/local/bigdata/hadoop
+
+# Hive 依赖 Hadoop
+# export HADOOP_HOME=/usr/local/bigdata/hadoop
+
+#export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+
+# Hive、Hadoop、MySQL 命令
+export PATH=$PATH:$HIVE_HOME/bin:/usr/local/bigdata/mysql/bin
+
+重新加载：source /etc/profile.d/bigdata.sh
+检查：
+echo $JAVA_HOME
+echo $HADOOP_HOME
+echo $HADOOP_MAPRED_HOME
+echo $HIVE_HOME
+预期：
+/usr/local/bigdata/jdk
+/usr/local/bigdata/hadoop
+/usr/local/bigdata/hadoop
+/usr/local/bigdata/hive
+
+检查 Hive：hive --version
+预期能够看到：Hive 4.1.0
+
+
+五、配置 Hive Metastore
+这是本节最重要的配置部分。Hive Metastore 是 Hive 的元数据管理服务。
+我们要实现：
+Hive
+  |
+  v
+Hive Metastore
+  |
+  v
+JDBC
+  |
+  v
+MySQL
+  |
+  v
+metastore 数据库
+
+5.1 配置 hive-env.sh
+切换到 dsj_admin：su - dsj_admin
+编辑：vi $HIVE_HOME/conf/hive-env.sh
+写入：
+# Java 环境
+export JAVA_HOME=/usr/local/bigdata/jdk
+
+# Hadoop 安装目录
+export HADOOP_HOME=/usr/local/bigdata/hadoop
+
+# Hadoop 配置目录
+export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+
+# MapReduce 安装目录
+export HADOOP_MAPRED_HOME=$HADOOP_HOME
+
+# Hive 配置目录
+export HIVE_CONF_DIR=/usr/local/bigdata/hive/conf
+
+
+5.2 配置 hive-site.xml
+编辑：vi $HIVE_HOME/conf/hive-site.xml
+写入：
+<?xml version="1.0" encoding="UTF-8"?>
+
+<configuration>
+
+    <!-- ================================= -->
+    <!-- MySQL Metastore 数据库连接配置 -->
+    <!-- ================================= -->
+
+    <!-- MySQL JDBC 连接地址 -->
+    <property>
+        <name>javax.jdo.option.ConnectionURL</name>
+        <value>jdbc:mysql://127.0.0.1:3306/metastore?useSSL=false&amp;allowPublicKeyRetrieval=true&amp;serverTimezone=UTC</value>
+    </property>
+
+    <!-- MySQL JDBC 驱动 -->
+    <property>
+        <name>javax.jdo.option.ConnectionDriverName</name>
+        <value>com.mysql.cj.jdbc.Driver</value>
+    </property>
+
+    <!-- MySQL 用户名 -->
+    <property>
+        <name>javax.jdo.option.ConnectionUserName</name>
+        <value>hive</value>
+    </property>
+
+    <!-- MySQL 密码 -->
+    <property>
+        <name>javax.jdo.option.ConnectionPassword</name>
+        <value>123456</value>
+    </property>
+
+
+    <!-- ================================= -->
+    <!-- Metastore 配置 -->
+    <!-- ================================= -->
+
+    <!-- Metastore 服务地址 -->
+    <property>
+        <name>hive.metastore.uris</name>
+        <value>thrift://master:9083</value>
+    </property>
+
+    <!-- 元数据存储在 MySQL，不使用自动建表 -->
+    <property>
+        <name>datanucleus.schema.autoCreateAll</name>
+        <value>false</value>
+    </property>
+
+    <!-- 开启元数据版本检查 -->
+    <property>
+        <name>hive.metastore.schema.verification</name>
+        <value>true</value>
+    </property>
+
+    <!-- 关闭 Metastore 通知事件 API 权限校验 -->
+    <property>
+        <name>metastore.event.db.notification.api.auth</name>
+        <value>false</value>
+    </property>
+
+
+
+    <!-- ================================= -->
+    <!-- Hive Warehouse 数据仓库目录 -->
+    <!-- ================================= -->
+
+    <!-- Hive 默认数据仓库 -->
+    <property>
+        <name>hive.metastore.warehouse.dir</name>
+        <value>/user/hive/warehouse</value>
+    </property>
+
+    <!-- Hive 临时目录 -->
+    <property>
+        <name>hive.exec.scratchdir</name>
+        <value>/tmp/hive</value>
+    </property>
+
+
+    <!-- ================================= -->
+    <!-- Hive 执行引擎 -->
+    <!-- ================================= -->
+
+    <!-- 使用 MapReduce 执行 SQL -->
+    <property>
+        <name>hive.execution.engine</name>
+        <value>mr</value>
+    </property>
+
+
+    <!-- ================================= -->
+    <!-- HiveServer2 配置 -->
+    <!-- ================================= -->
+
+    <!-- HiveServer2 监听主机 -->
+    <property>
+        <name>hive.server2.thrift.bind.host</name>
+        <value>0.0.0.0</value>
+    </property>
+
+    <!-- HiveServer2 端口 -->
+    <property>
+        <name>hive.server2.thrift.port</name>
+        <value>10000</value>
+    </property>
+
+    <!-- HiveServer2 Web 页面 -->
+    <property>
+        <name>hive.server2.webui.host</name>
+        <value>master</value>
+    </property>
+
+    <!-- HiveServer2 Web 端口 -->
+    <property>
+        <name>hive.server2.webui.port</name>
+        <value>10002</value>
+    </property>
+
+    <!-- 关闭 Kerberos，实验环境使用 NONE -->
+    <property>
+        <name>hive.server2.authentication</name>
+        <value>NONE</value>
+    </property>
+
+    <!-- 不启用用户身份模拟 -->
+    <property>
+        <name>hive.server2.enable.doAs</name>
+        <value>false</value>
+    </property>
+
+</configuration>
+
+
+几个关键参数解释：
+参数	作用
+ConnectionURL	MySQL 数据库连接地址
+ConnectionDriverName	MySQL JDBC 驱动
+ConnectionUserName	MySQL 用户
+ConnectionPassword	MySQL 密码
+hive.metastore.uris	Metastore 服务地址
+warehouse.dir	Hive 数据仓库目录
+hive.execution.engine	SQL 执行引擎
+thrift.port	HiveServer2 连接端口
+
+这里特别注意：
+MySQL 的 metastore 数据库和 HDFS 的 warehouse 目录是两个完全不同的东西。
+- MySQL：保存表结构、字段、分区等信息。
+- HDFS：保存 CSV、ORC、Parquet 等实际数据。
+
+5.3 创建 HDFS 数据仓库目录
+先检查 Hadoop：hdfs dfs -ls /
+创建 Hive 目录：hdfs dfs -mkdir -p /user/hive/warehouse
+创建临时目录：hdfs dfs -mkdir -p /tmp/hive
+设置权限：
+hdfs dfs -chmod 777 /user/hive/warehouse
+hdfs dfs -chmod 777 /tmp/hive
+
+检查：hdfs dfs -ls /user/hive
+应该能看到：warehouse
+
+
+六、初始化 Hive Metastore
+现在 MySQL、Hive 和 HDFS 都准备好了。
+接下来让 Hive 在 MySQL 中创建自己的元数据表。
+6.1 检查 JDBC 驱动
+ls $HIVE_HOME/lib/mysql-connector-j-8.4.0.jar
+6.2 初始化数据库结构
+执行：schematool -dbType mysql -initSchema
+这个命令非常重要。
+它会在 MySQL 的 metastore 数据库中自动创建 Hive 所需的数据表。
+例如：
+表名	作用
+DBS	保存 Hive 数据库信息
+TBLS	保存 Hive 表信息
+COLUMNS_V2	保存字段信息
+SDS	保存存储描述信息
+PARTITIONS	保存分区信息
+SERDES	保存序列化信息
+VERSION	保存 Metastore 版本
+
+初始化成功应该看到类似：schemaTool completed
+
+6.3 验证 Metastore【可以直接windows用navicat链接查看】
+执行：schematool -dbType mysql -info
+查看 MySQL：mysql -uhive -p -h127.0.0.1 metastore
+执行：SHOW TABLES;
+现在应该可以看到很多 Hive 自动创建的数据表。
+再执行：SELECT * FROM VERSION;
+验证 3
+ Hive 已经成功在 MySQL 中创建 Metastore 元数据结构。
+
+七、启动 Hive Metastore
+这里我们将 Metastore 和 HiveServer2 分开启动。
+这样可以理解它们之间的关系，也方便后续扩展到真正的分布式集群。
+7.1 启动 Metastore
+使用 dsj_admin 用户：
+nohup hive --service metastore \
+> $HIVE_HOME/logs/metastore.log 2>&1 &
+查看日志：tail -f $HIVE_HOME/logs/metastore.log
+正常情况下，Metastore 会监听：9083
+检查：ss -lntp | grep 9083
+
+7.2 启动 HiveServer2
+执行：nohup hive --service hiveserver2 \
+> $HIVE_HOME/logs/hiveserver2.log 2>&1 &
+查看日志：tail -f $HIVE_HOME/logs/hiveserver2.log
+检查端口：ss -lntp | grep 10000
+Web UI 端口：ss -lntp | grep 10002
+
+7.3 检查 Java 进程
+jps
+应该能看到类似：
+NameNode
+DataNode
+SecondaryNameNode
+ResourceManager
+NodeManager
+RunJar
+RunJar
+Jps
+这里两个 RunJar 分别对应 Hive Metastore 和 HiveServer2。
+注意：jps 中的 RunJar 是正常现象，不代表 Hive 启动失败。
+
+八、使用 Beeline 连接 HiveServer2
+Hive 4 推荐使用 Beeline 连接 HiveServer2。
+8.1 启动 Beeline
+beeline -u jdbc:hive2://master:10000/default -n dsj_admin
+连接成功后会进入：
+Beeline version 4.1.0
+beeline>
+
+8.2 查看数据库
+执行：SHOW DATABASES;
+预期：default
+创建数据库：CREATE DATABASE test_dw;
+查看：SHOW DATABASES;
+预期：
+default
+test_dw
+
+
+8.3 创建数据表
+切换数据库：USE test_dw;
+创建学生表：
+CREATE TABLE student (
+    id INT,
+    name STRING,
+    age INT
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE;
+查看表：SHOW TABLES;
+查看表结构：DESC student;
+
+8.4 插入测试数据
+先在 Linux 本地创建 CSV 文件：
+cat > /tmp/student.csv <<'EOF'
+1,张三,18
+2,李四,19
+3,王五,20
+4,赵六,21
+EOF
+然后回到 Beeline：
+LOAD DATA LOCAL INPATH '/tmp/student.csv'
+INTO TABLE student;
+
+查询：SELECT * FROM student;
+预期：
+1  张三  18
+2  李四  19
+3  王五  20
+4  赵六  21
+
+
+再测试统计：SELECT COUNT(*) FROM student;
+预期：4
+
+注意：统计查询会使用配置的 MapReduce 执行引擎，因此可能需要等待 YARN 启动计算任务。
+
+九、验证 MySQL 和 HDFS 的数据关系
+这一步非常值得学习。
+我们分别检查 MySQL 和 HDFS。
+
+9.1 检查 MySQL 元数据【可以用navicat看方便】
+退出 Beeline：!quit
+登录 MySQL：
+mysql -uhive -p -h127.0.0.1 metastore
+查看 Hive 数据库：
+SELECT NAME FROM DBS;
+应该能够看到：
+default
+test_dw
+查看 Hive 表：SELECT TBL_NAME FROM TBLS;
+应该能够看到：student
+这说明 Hive 已经把数据库和表结构写入 MySQL。
+
+9.2 检查 HDFS 实际数据
+执行：hdfs dfs -ls /user/hive/warehouse/test_dw.db/student
+应该能看到数据文件。
+查看文件内容：hdfs dfs -cat /user/hive/warehouse/test_dw.db/student/*
+应该能看到：
+1,张三,18
+2,李四,19
+3,王五,20
+4,赵六,21
+
+验证 4
+ 到这里，Hive 的整个数据链路已经打通：
+Beeline
+执行 Hive SQL
+↓
+HiveServer2 :10000
+接收 SQL 请求
+↓
+Metastore :9083
+查询 MySQL 元数据
+↓
+MySQL			HDFS
+表结构、字段、分区		CSV、ORC、Parquet 数据
+↓
+YARN + MapReduce
+执行 SQL 对应的计算任务
+
+十、配置 Haddop和Hive 开机自动启动
+前面使用 nohup 启动，关闭终端不会立即退出，但重启系统后不会自动启动。建议再配置 systemd。
+切换 root：su -
+10.0 配置Hadoop服务
+创建：vi /etc/systemd/system/hadoop.service
+写入：
+[Unit]
+Description=Hadoop Cluster
+After=network-online.target sshd.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=dsj_admin
+RemainAfterExit=yes
+WorkingDirectory=/home/dsj_admin
+
+ExecStart=/bin/bash -c 'source /etc/profile.d/bigdata.sh && $HADOOP_HOME/sbin/start-dfs.sh && $HADOOP_HOME/sbin/start-yarn.sh'
+
+ExecStop=/bin/bash -c 'source /etc/profile.d/bigdata.sh && $HADOOP_HOME/sbin/stop-yarn.sh && $HADOOP_HOME/sbin/stop-dfs.sh'
+
+TimeoutStartSec=300
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target
+
+
+10.1 配置 Metastore 服务
+创建：vi /etc/systemd/system/hive-metastore.service
+写入：
+[Unit]
+Description=Apache Hive Metastore
+After=network-online.target mysql.service hadoop.service
+Requires=mysql.service hadoop.service
+
+[Service]
+Type=simple
+
+User=dsj_admin
+Group=dsj_admin
+
+Environment=JAVA_HOME=/usr/local/bigdata/jdk
+Environment=HADOOP_HOME=/usr/local/bigdata/hadoop
+Environment=HADOOP_CONF_DIR=/usr/local/bigdata/hadoop/etc/hadoop
+Environment=HADOOP_MAPRED_HOME=/usr/local/bigdata/hadoop
+Environment=HIVE_HOME=/usr/local/bigdata/hive
+Environment=HIVE_CONF_DIR=/usr/local/bigdata/hive/conf
+Environment=PATH=/usr/local/bigdata/hive/bin:/usr/local/bigdata/hadoop/bin:/usr/local/bigdata/mysql/bin:/usr/local/bin:/usr/bin
+
+ExecStart=/usr/local/bigdata/hive/bin/hive --service metastore
+
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+
+10.2 配置 HiveServer2 服务
+创建：vi /etc/systemd/system/hive-server2.service
+写入：
+[Unit]
+Description=Apache HiveServer2
+After=network.target hadoop.service mysql.service hive-metastore.service
+Requires=hadoop.service mysql.service hive-metastore.service
+
+[Service]
+Type=simple
+
+User=dsj_admin
+Group=dsj_admin
+
+Environment=JAVA_HOME=/usr/local/bigdata/jdk
+Environment=HADOOP_HOME=/usr/local/bigdata/hadoop
+Environment=HADOOP_CONF_DIR=/usr/local/bigdata/hadoop/etc/hadoop
+Environment=HADOOP_MAPRED_HOME=/usr/local/bigdata/hadoop
+Environment=HIVE_HOME=/usr/local/bigdata/hive
+Environment=HIVE_CONF_DIR=/usr/local/bigdata/hive/conf
+Environment=PATH=/usr/local/bigdata/hive/bin:/usr/local/bigdata/hadoop/bin:/usr/local/bigdata/mysql/bin:/usr/local/bin:/usr/bin
+
+ExecStart=/usr/local/bigdata/hive/bin/hive --service hiveserver2
+
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+
+10.3 加载并启动
+如果之前使用 nohup 启动过 Hive，先停止旧进程，避免端口冲突。
+然后：systemctl daemon-reload
+设置开机启动：
+systemctl enable hadoop
+systemctl enable hive-metastore
+systemctl enable hive-server2
+
+启动：
+systemctl start hadoop
+systemctl start hive-metastore
+systemctl start hive-server2
+
+查看：
+systemctl status hadoop
+systemctl status hive-metastore
+systemctl status hive-server2
+
+以后就可以使用：
+操作	命令
+启动 Hadoop	systemctl start hadoop
+停止 Hadoop	systemctl stop hadoop
+启动 MySQL	systemctl start mysql
+停止 MySQL	systemctl stop mysql
+启动 Metastore	systemctl start hive-metastore
+停止 Metastore	systemctl stop hive-metastore
+启动 HiveServer2	systemctl start hive-server2
+停止 HiveServer2	systemctl stop hive-server2
+
+推荐启动顺序：
+MySQL
+  ↓
+Hadoop HDFS
+  ↓
+Hadoop YARN
+  ↓
+Hive Metastore
+  ↓
+HiveServer2
+
+停止时建议按照相反顺序。

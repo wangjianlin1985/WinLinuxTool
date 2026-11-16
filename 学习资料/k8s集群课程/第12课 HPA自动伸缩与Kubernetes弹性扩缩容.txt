@@ -1,0 +1,377 @@
+这一课我们学习 Kubernetes 非常重要的一个功能：HPA（Horizontal Pod Autoscaler，水平 Pod 自动伸缩）。
+前面第2课我们学习了 Deployment，第10课学习了资源管理与 Pod 调度，第11课学习了健康检查与 Pod 生命周期管理。
+现在我们把这些知识串起来：
+- 当访问量增加时，自动增加 Pod。
+- 当访问量下降时，自动减少 Pod。
+- 不需要管理员手动执行 kubectl scale。
+- 通过 CPU、内存等指标，让 Kubernetes 自动决定 Pod 的副本数量。
+这也是生产环境中常见的弹性伸缩能力。
+
+一、什么是 HPA？
+HPA 全称：Horizontal Pod Autoscaler
+中文叫：水平 Pod 自动伸缩器。
+它的作用是根据监控指标，自动调整 Deployment 或 StatefulSet 管理的 Pod 数量。
+举个例子：假设我们部署了一个 Nginx 服务：
+nginx-service
+       |
+       |
+   Deployment
+       |
+       |
+   2 个 Pod
+正常情况下运行2个 Pod 就够了。
+
+但是突然访问量增加：
+用户访问量增加
+       |
+       v
+CPU 使用率升高
+       |
+       v
+HPA 检测到 CPU 超过目标值
+       |
+       v
+Deployment 自动增加 Pod
+       |
+       v
+2个 Pod → 4个 Pod → 6个 Pod
+
+当访问量下降：
+CPU 使用率降低
+       |
+       v
+HPA 检测到负载下降
+       |
+       v
+Deployment 自动减少 Pod
+       |
+       v
+6个 Pod → 4个 Pod → 2个 Pod
+
+这就是弹性扩缩容。
+
+二、HPA 的工作原理
+HPA 并不是直接监控服务器 CPU，而是通过 Kubernetes 的 Metrics API 获取 Pod 的资源使用情况。
+整个流程：
+1. Pod 正常运行。
+2. Metrics Server 收集节点和 Pod 的 CPU、内存指标。
+3. HPA 定期读取 Metrics API。
+4. HPA 根据实际指标和目标指标计算需要的 Pod 数量。
+5. HPA 修改 Deployment 的副本数量。
+6. Deployment 控制 ReplicaSet 创建或删除 Pod。
+这里要认识三个重要组件：
+组件		作用
+HPA		决定需要多少个 Pod
+Metrics Server	提供 CPU、内存监控指标
+Deployment	根据副本数量创建或删除 Pod
+
+注意：HPA 本身不负责创建 Pod，它负责调整副本数量，真正创建 Pod 的还是 Deployment 和 ReplicaSet。
+
+三、安装 Metrics Server
+我们先检查集群是否已经安装 Metrics Server。
+在 k8s-master 执行：kubectl get deployment -n kube-system metrics-serve
+如果提示：Error from server (NotFound)  说明还没有安装。
+先查看有没有已经存在的 Metrics Server：kubectl get pods -A | grep metrics-server
+如果确实没有，可以通过官方清单安装：
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+注意：这里可能这个yaml下载失败，可以先下载这个components.yaml后上传到linux中执行或者cat这个文件内容写入到linux目录下
+然后metrics-server的镜像要从registry.k8s.io拉取也可能访问不了，可以设置国内镜像，方法和设置containerd的镜像一样如下：
+创建目录：mkdir -p /etc/containerd/certs.d/registry.k8s.io
+写入镜像地址后需要重启containerd生效：
+cat > /etc/containerd/certs.d/registry.k8s.io/hosts.toml <<'EOF'
+server = "https://registry.k8s.io"
+
+[host."https://k8s.m.daocloud.io"]
+  capabilities = ["pull", "resolve"]
+EOF
+
+由于你的实验环境是 VMware NAT 下的 Rocky Linux 9.8 三节点集群，Metrics Server 可能会遇到 kubelet 证书验证问题。
+实验环境中可以先配置跳过 kubelet TLS 证书验证：
+kubectl patch deployment metrics-server -n kube-system --type=json \
+-p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+这只是方便实验的配置，生产环境建议正确配置 kubelet 证书，不要长期关闭验证。
+
+查看安装状态：kubectl get pods -n kube-system | grep metrics-server
+等待 Pod 变成 Running。
+检查指标是否正常：kubectl top nodes
+如果正常，应该可以看到类似：
+NAME         CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
+k8s-master   250m         12%    1800Mi          45%
+k8s-node1    150m         8%     1200Mi          30%
+k8s-node2    120m         6%     1100Mi          28%
+
+再查看 Pod：kubectl top pods -A
+实验检查点：这两个命令能正常显示数据，说明 Metrics Server 已经能够提供指标。
+
+四、创建一个用于 HPA 实验的 Deployment
+接下来我们自己创建一个 Deployment，专门用来测试自动扩缩容。
+这里使用 BusyBox 模拟持续消耗 CPU 的应用。
+创建配置文件：
+cat > /root/hpa-demo.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpa-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hpa-demo
+  template:
+    metadata:
+      labels:
+        app: hpa-demo
+    spec:
+      containers:
+      - name: busybox
+        image: busybox:1.36
+        command:
+        - /bin/sh
+        - -c
+        - while true; do dd if=/dev/zero of=/dev/null; done
+        resources:
+          requests:
+            cpu: 100m
+            memory: 32Mi
+          limits:
+            cpu: 500m
+            memory: 64Mi
+EOF
+
+应用配置：kubectl apply -f /root/hpa-demo.yaml
+查看 Deployment：kubectl get deployment hpa-demo
+查看 Pod：kubectl get pods -l app=hpa-demo
+
+这里重点理解：
+resources:
+  requests:
+    cpu: 100m
+表示容器申请的 CPU 资源为 0.1 核。
+limits:
+  cpu: 500m
+表示容器最多使用 0.5 核 CPU。
+为什么必须设置 requests.cpu？
+
+因为 HPA 使用 CPU 利用率百分比进行伸缩时，需要以 CPU Request 作为计算基准。
+例如：
+- CPU Request：100m
+- 实际使用：50m
+- CPU 利用率：50%
+如果没有设置 CPU Request，基于 CPU 利用率的 HPA 就无法正常计算目标利用率。
+
+五、创建 HPA 自动伸缩规则
+现在让 Kubernetes 自动管理 Pod 数量。
+执行：kubectl autoscale deployment hpa-demo --cpu=50% --min=1 --max=5
+
+参数解释：
+参数			含义
+deployment hpa-demo	监控 hpa-demo Deployment
+--cpu=50%		CPU 目标利用率为 50%
+--min=1			最少运行 1 个 Pod
+--max=5			最多运行 5 个 Pod
+
+查看 HPA：kubectl get hpa
+查看详细信息：kubectl describe hpa hpa-demo
+正常情况下，你会看到类似：
+NAME       REFERENCE             TARGETS   MINPODS   MAXPODS   REPLICAS
+hpa-demo   Deployment/hpa-demo   500%/50%  1         5         1
+
+这里的 500%/50% 表示：
+- 当前 CPU 利用率约为 500%。
+- 目标 CPU 利用率为 50%。
+由于当前只有一个 Pod，且 CPU 消耗较高，HPA 就会尝试增加副本数量。
+
+注意：实际显示值以你的集群监控数据为准。
+
+六、观察 HPA 自动扩容
+执行：kubectl get hpa -w
+再打开另一个终端，执行：kubectl get pods -l app=hpa-demo -w
+观察 Pod 数量变化。由于我们的测试容器会持续消耗 CPU，HPA 会尝试将 Pod 数量增加到最大值5。
+
+可能看到：
+NAME                        READY   STATUS
+hpa-demo-xxxxx              1/1     Running
+hpa-demo-yyyyy              1/1     Running
+hpa-demo-zzzzz              1/1     Running
+hpa-demo-aaaaa              1/1     Running
+hpa-demo-bbbbb              1/1     Running
+
+实验重点
+你应该理解：
+CPU 超过目标值
+       |
+       v
+HPA 计算需要的副本数量
+       |
+       v
+修改 Deployment 副本数
+       |
+       v
+ReplicaSet 创建新的 Pod
+
+
+这里补充一个重要知识：
+
+HPA 计算副本数量的基本公式： 期望副本数  = 当前副本数 * （当前指标/目标指标）
+例如：当前有2个 Pod，CPU 平均利用率100%，目标利用率50%。  
+2 * （100% / 50%） = 4  那么 HPA 就会希望扩容到4个 Pod。
+实际还会受到最小副本数、最大副本数、伸缩策略和稳定窗口等因素影响。
+
+七、观察 HPA 自动缩容
+我们的 BusyBox 一直在消耗 CPU，因此需要停止测试负载。
+执行：kubectl delete deployment hpa-demo
+注意：这样会同时删除它关联的 HPA 吗？不会。
+HPA 是单独的 Kubernetes 资源。
+查看：kubectl get hpa
+此时可能看到 HPA 报错，因为它监控的 Deployment 已经不存在。
+因此，接下来重新创建 Deployment：kubectl apply -f /root/hpa-demo.yaml
+
+然后将持续消耗 CPU 的命令改成休眠：
+kubectl set command deployment hpa-demo -- /bin/sh -c 'sleep infinity'
+等待 Metrics Server 更新指标，再观察：kubectl get hpa -w
+当 CPU 使用率下降后，HPA 就会逐渐缩减副本数量。
+
+注意： Kubernetes 默认有缩容稳定窗口，通常为300秒，因此不会立即缩容。实际等待时间还受指标采集周期和伸缩策略影响。
+
+八、使用 YAML 创建 HPA（生产环境推荐）
+前面使用：kubectl autoscale   属于快速创建方式。
+生产环境更推荐使用 YAML 文件管理 HPA，方便版本控制和后期维护。创建：
+cat > /root/hpa.yaml <<'EOF'
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hpa-demo
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 0
+EOF
+
+应用：kubectl apply -f /root/hpa.yaml
+查看：kubectl get hpa
+
+这份 YAML 重点认识以下字段：
+字段		含义
+scaleTargetRef	指定要伸缩的 Deployment
+minReplicas	最小副本数
+maxReplicas	最大副本数
+averageUtilization	CPU 平均目标利用率
+scaleDown	缩容策略
+scaleUp		扩容策略
+stabilizationWindowSeconds	稳定窗口
+
+特别注意：
+scaleDown:
+  stabilizationWindowSeconds: 300
+表示缩容时使用300秒稳定窗口，避免负载短暂下降就立即删除 Pod。
+
+九、HPA 支持哪些监控指标？HPA 不仅支持 CPU。
+指标类型	说明			使用场景
+CPU	CPU 使用率		CPU 密集型应用
+Memory	内存使用量或利用率		内存密集型应用
+Pods	每个 Pod 的自定义指标	请求数、消息处理量
+Object	Kubernetes 对象指标	Ingress 请求量
+External	外部监控指标		RabbitMQ 队列长度等
+
+例如：
+一个 Java 微服务可能需要根据 CPU 使用率自动扩容，也可能需要根据 RabbitMQ 消息队列长度扩容。
+这就需要结合 Prometheus Adapter 等组件提供自定义或外部指标。
+
+十、HPA 和 VPA 有什么区别？
+Kubernetes 还有一个重要的弹性伸缩概念：VPA。
+VPA 全称：Vertical Pod Autoscaler   它与 HPA 的区别:
+
+HPA 水平扩缩容		VPA 垂直扩缩容
+1 → 5			100m → 500m
+增加或减少 Pod 数量。	调整 Pod 的 CPU、内存资源配置。
+
+举个例子：假设一个 Java 应用：
+
+原本：		使用 HPA：	使用 VPA：
+2个 Pod		5个 Pod		2个 Pod
+每个 Pod：	每个 Pod：	每个 Pod：
+CPU 100m	CPU 100m	CPU 500m
+内存 256Mi	内存 256Mi	内存 1Gi
+
+两者解决的问题不同。
+实际生产中可以组合使用，但要注意避免 HPA 和 VPA 同时管理 CPU 或内存的同一指标，否则可能出现伸缩相互影响。
+
+十一、HPA 和 Cluster Autoscaler 的区别
+还有一个容易混淆的知识点。
+HPA 和 Cluster Autoscaler 不是一回事。
+功能	HPA		Cluster Autoscaler
+管理对象	Pod		Node
+扩容方式	增加 Pod		增加节点
+缩容方式	减少 Pod		减少节点
+主要作用	应用弹性伸缩	集群资源弹性伸缩
+
+举个例子：
+假设集群只有3台 Node，HPA 想创建10个 Pod。
+但是3台 Node 的资源已经不足以容纳这些 Pod。
+
+这时候：
+HPA 增加 Pod
+      |
+      v
+Node 资源不足
+      |
+      v
+部分 Pod Pending
+      |
+      v
+Cluster Autoscaler 检测到资源不足
+      |
+      v
+增加 Node
+      |
+      v
+Pod 被调度到新 Node
+
+
+这才是完整的集群弹性伸缩。
+注意：Cluster Autoscaler 需要配合支持自动创建、删除节点的云平台或基础设施使用。
+你的 VMware 三节点实验环境目前没有自动增加虚拟机的能力，所以暂时只学习 HPA 即可。
+
+十二、本课实验总结与常用命令
+本课建议把下面这些命令收录到你的 WinLinuxTool 常用命令库中。
+命令				作用
+kubectl top nodes			查看节点 CPU、内存
+kubectl top pods -A		查看所有 Pod 资源使用情况
+kubectl get hpa			查看 HPA
+kubectl get hpa -w			实时观察 HPA
+kubectl describe hpa hpa-demo	查看 HPA 详细信息
+kubectl autoscale deployment nginx --cpu=50% --min=1 --max=5	快速创建 HPA
+kubectl get hpa -o yaml		查看 HPA YAML
+kubectl delete hpa hpa-demo	删除 HPA
+kubectl delete -f hpa.yaml		根据 YAML 删除 HPA
+kubectl scale deployment nginx --replicas=3	手动调整副本数量
+
+实验结束清理：
+kubectl delete hpa hpa-demo
+kubectl delete deployment hpa-demo
+
+本课必须掌握的知识，完成这一课后，你应该能够理解：
+1. HPA 是什么，解决什么问题。
+2. Metrics Server 的作用。
+3. HPA 如何获取 CPU、内存指标。
+4. HPA 如何自动扩容和缩容。
+5. requests 和 limits 对 HPA 的影响。
+6. 如何使用 kubectl autoscale 创建 HPA。
+7. 如何使用 YAML 创建 HPA。
+8. HPA、VPA、Cluster Autoscaler 三者的区别。

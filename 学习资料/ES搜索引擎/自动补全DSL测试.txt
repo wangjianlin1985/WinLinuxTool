@@ -1,0 +1,39 @@
+ // 自动补全的索引库
+PUT test2
+{
+  "mappings": {
+    "properties": {
+      "title":{
+        "type": "completion"
+      }
+    }
+  }
+}
+// 示例数据
+POST test2/_doc
+{
+  "title": ["Sony", "WH-1000XM3"]
+}
+POST test2/_doc
+{
+  "title": ["SK-II", "PITERA"]
+}
+POST test2/_doc
+{
+  "title": ["Nintendo", "switch"]
+}
+
+// 自动补全查询
+POST /test2/_search
+{
+  "suggest": {
+    "title_suggest": {
+      "text": "s", // 关键字
+      "completion": {
+        "field": "title", // 补全字段
+        "skip_duplicates": true, // 跳过重复的
+        "size": 10 // 获取前10条结果
+      }
+    }
+  }
+}

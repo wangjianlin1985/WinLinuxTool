@@ -1,0 +1,51 @@
+cat > /etc/rsyslog.d/server.conf <<'EOC'
+module(load="imudp")
+input(type="imudp" port="514")
+
+template(name="RemoteLogs" type="string" string="/var/log/remote/%HOSTNAME%/%syslogfacility-text%.log")
+
+if ($fromhost-ip != "127.0.0.1") then {
+    action(type="omfile" dynaFile="RemoteLogs")
+    stop
+}
+EOC
+
+systemctl restart rsyslog
+
+
+
+2. 配置说明
+配置			含义
+module(load="imudp")	加载 UDP 日志接收模块
+input(type="imudp" port="514")	监听 UDP 514 端口
+template(...)		定义远程日志的保存路径和文件名
+%HOSTNAME%		日志发送方的主机名
+%syslogfacility-text%	日志设施名称，例如 user、authpriv、cron
+action(type="omfile" dynaFile="RemoteLogs")	按模板指定的路径保存日志
+stop			停止继续处理当前日志消息的后续规则
+
+例如，主机名为 node1 的服务器发送 cron 类型日志，可能会保存到：
+/var/log/remote/node1/cron.log
+注意：如果发送方使用的主机名不同，日志就会进入不同目录。
+
+3. 开放防火墙端口
+如果服务器启用了 firewalld，可以执行：
+firewall-cmd --add-port=514/udp --permanent
+firewall-cmd --reload
+
+- --add-port=514/udp：开放 UDP 514 端口。
+- --permanent：永久保存规则。
+- --reload：重新加载防火墙配置。
+如果 firewalld 本来就处于停止状态，则这一步通常不需要执行。
+
+
+4. 检查服务是否正常
+systemctl status rsyslog
+ss -lunp | grep ':514'
+
+- 第一条检查 rsyslog 服务状态。
+- 第二条检查 UDP 514 端口是否正在监听。
+
+
+还可以查看日志：
+tail -f /var/log/messages

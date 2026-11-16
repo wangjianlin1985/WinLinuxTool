@@ -1,0 +1,292 @@
+Rocky Linux 9.8 基础环境准备
+本课目标
+完成后，你的 Linux 主机应该具备：
+- 主机名和 IP 地址正确。
+- JDK 17 安装成功。
+- Python 3.11 安装成功。
+- SSH 服务正常。
+- 时间同步正常。
+- 主机之间能够互相通信。
+- 大数据安装目录和数据目录规划完成。
+
+3.1 检查 Rocky Linux 版本
+在 master 上执行：
+cat /etc/rocky-release
+uname -r
+hostnamectl
+ip -br addr
+free -h
+lsblk
+
+预期：
+Rocky Linux release 9.8 (Blue Onyx)
+
+这里先记录 CPU、内存、磁盘容量，因为后面要根据实际资源分配 Hadoop、Spark、Kafka、Flink 的 JVM 内存。
+
+3.2 设置主机名
+单机伪分布式方案：
+hostnamectl set-hostname master
+
+三节点方案分别执行：
+master
+hostnamectl set-hostname master
+worker1
+hostnamectl set-hostname worker1
+worker2
+hostnamectl set-hostname worker2
+检查：hostname
+
+3.3 配置 hosts 主机映射
+三台机器都编辑：
+vi /etc/hosts
+
+配置内容：
+# ================================
+# Big Data Cluster Hosts
+# 大数据集群主机名与IP映射
+# ================================
+
+192.168.79.10 master
+192.168.79.11 worker1
+192.168.79.12 worker2
+
+保存后测试：
+ping -c 3 master
+ping -c 3 worker1
+ping -c 3 worker2
+单机阶段只需要 master 自己的 IP 能正常访问，另外两个节点在尚未创建时不要求 ping 通。
+
+3.4 安装基础工具【这里我暂时不安装，后面按需安装】
+三台机器都执行：
+dnf install -y \
+  wget \
+  curl \
+  vim \
+  net-tools \
+  lsof \
+  rsync \
+  unzip \
+  tar \
+  gzip \
+  git \
+  chrony \
+  openssh-server \
+  openssh-clients \
+  bind-utils \
+  which \
+  nc
+这些工具后续会频繁使用。
+
+例如：
+命令	用途
+wget	下载 Hadoop 等安装包
+rsync	同步软件和配置文件
+lsof	查看端口占用
+nc	检测网络端口
+chrony	时间同步
+ssh	远程登录
+vim	编辑配置文件
+
+3.5 配置时间同步
+Hadoop、Kafka、ZooKeeper 等分布式组件都需要比较准确的系统时间。
+执行：systemctl enable --now chronyd
+检查：systemctl status chronyd
+查看时间同步状态：chronyc tracking
+查看时间源：chronyc sources -v
+
+三台机器必须保持时间一致。这里使用 Rocky Linux 自带的 chrony 服务即可，后续如果实验环境没有互联网，再统一配置内网时间源。
+
+3.6 安装 JDK 17
+三台机器都执行：
+dnf install -y java-17-openjdk-devel
+检查：java -version
+预期类似：
+openjdk version "17.0.x"
+OpenJDK Runtime Environment
+OpenJDK 64-Bit Server VM
+
+检查 Java 编译器：javac -version
+预期：javac 17.0.x
+查看 JDK 实际安装位置：readlink -f $(which java)
+Rocky Linux 通常会安装在：/usr/lib/jvm/
+
+创建软连接：sudo ln -sfn /usr/lib/jvm/java-17-openjdk /usr/local/bigdata/jdk
+我们后续统一使用：export JAVA_HOME=/usr/local/bigdata/jdk
+
+3.7 安装 Python 3.11【rocky9.8竟然自带python3.9这个也先不要安装】
+Rocky Linux 9 可以通过 DNF 安装 Python 3.11。
+执行：dnf install -y python3.11 python3.11-pip
+检查：
+python3.11 --version
+python3.11 -m pip --version
+
+预期：
+Python 3.11.x
+
+这里特别注意：
+不要替换 Rocky Linux 自带的系统 Python。
+
+系统的 DNF 等工具可能依赖系统 Python。我们额外安装 Python 3.11，后续明确指定 Spark 和 Flink 使用它。
+3.8 配置统一环境变量【其实这个python3也是一个软连接】
+创建配置文件：
+vi /etc/profile.d/bigdata.sh
+
+写入：
+# ==========================================
+# Big Data Platform Environment Variables
+# 大数据平台统一环境变量
+# Rocky Linux 9.8
+# ==========================================
+
+# Java JDK 17
+export JAVA_HOME=/usr/local/bigdata/jdk
+
+# Python 3.11
+export PYTHON_HOME=/usr/bin
+
+# 指定 PySpark 使用的 Python
+export PYSPARK_PYTHON=/usr/bin/python3
+
+# 指定 Spark Driver 使用的 Python
+export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+
+# 指定 PyFlink 使用的 Python
+export PYFLINK_CLIENT_EXECUTABLE=/usr/bin/python3
+
+# Java 可执行程序目录
+export PATH=$JAVA_HOME/bin:$PATH
+
+# Python 可执行程序目录
+export PATH=$PYTHON_HOME:$PATH
+
+说明：
+- JAVA_HOME：所有 Java 大数据组件统一使用 JDK 17。
+- PYSPARK_PYTHON：Spark Python Worker 使用 Python 3.11。
+- PYSPARK_DRIVER_PYTHON：Spark Python Driver 使用 Python 3.11。
+- PYFLINK_CLIENT_EXECUTABLE：指定 PyFlink 客户端 Python 解释器。
+加载配置：
+source /etc/profile.d/bigdata.sh
+
+验证：
+echo $JAVA_HOME
+echo $PYSPARK_PYTHON
+java -version
+python3.11 --version 【改用 python3 --version】
+
+3.9 配置 SSH 服务
+三台机器都执行：
+systemctl enable --now sshd
+检查：
+systemctl status sshd
+测试本机 SSH：
+ssh localhost
+首次连接输入：
+yes
+退出：
+exit
+后续 Hadoop、Spark、HBase 等组件会用 SSH 远程启动其他节点上的服务，因此还要配置 master 到 worker1、worker2 的 SSH 免密登录。
+
+我们在下一课专门完成 SSH 密钥和免密验证。
+3.10 创建大数据目录
+三台机器都执行：
+mkdir -p /usr/local/bigdata
+mkdir -p /data/bigdata
+mkdir -p /data/bigdata/logs 【不执行，后面用的是/data/hadoop/logs这样的路径】
+mkdir -p /data/bigdata/tmp 【不执行，后面用的是/data/hadoop/tmp这样的路径】
+
+
+目录说明：
+目录	用途
+/usr/local/bigdata	大数据软件统一存放位置
+/data/bigdata	大数据组件的数据目录
+/data/bigdata/logs	组件运行日志
+/data/bigdata/tmp	临时文件
+
+后续软件会统一放在 /usr/local/bigdata 下，例如：
+/usr/local/bigdata/
+├── hadoop-3.5.0/
+├── hive-4.1.0/
+├── spark-4.0.1/
+├── hbase-2.6.7/
+├── kafka-4.0.x/
+├── flink-2.0.x/
+└── zookeeper-3.9.x/
+这里暂时不创建软链接，等安装对应软件时再统一配置。
+
+第四部分：本课验收
+完成上面的配置后，在每台机器执行下面的检查命令。
+echo "========== OS =========="
+cat /etc/rocky-release
+
+echo "========== HOSTNAME =========="
+hostname
+
+echo "========== IP =========="
+ip -br addr
+
+echo "========== JAVA =========="
+java -version
+
+echo "========== JAVAC =========="
+javac -version
+
+echo "========== PYTHON =========="
+python3.11 --version
+
+echo "========== SSH =========="
+systemctl is-active sshd
+
+echo "========== CHRONY =========="
+systemctl is-active chronyd
+
+echo "========== JAVA_HOME =========="
+echo $JAVA_HOME
+
+echo "========== PYSPARK =========="
+echo $PYSPARK_PYTHON
+
+echo "========== DISK =========="
+df -h
+
+
+验收标准
+- [ ] Rocky Linux 9.8 正常。
+- [ ] 主机名正确。
+- [ ] IP 地址正确。
+- [ ] JDK 17 安装成功。
+- [ ] javac 17 正常。
+- [x] Python 3.11 安装成功。
+- [ ] sshd 正常运行。
+- [ ] chronyd 正常运行。
+- [ ] 环境变量加载成功。
+- [ ] 大数据目录创建成功.
+
+第五部分：安装记录建议
+建议你在 Windows 上建立一份专门的安装记录：
+大数据平台安装记录/
+│
+├── 00-整体架构与版本规划.md
+├── 01-RockyLinux基础环境准备.md
+├── 02-JDK17安装与配置.md
+├── 03-Python311安装与配置.md
+├── 04-SSH免密登录配置.md
+├── 05-Hadoop分布式部署.md
+├── 06-YARN分布式部署.md
+├── 07-Hive部署.md
+├── 08-Spark部署.md
+├── 09-HBase部署.md
+├── 10-Kafka部署.md
+├── 11-Flink部署.md
+└── 12-集群综合测试.md
+每一课都按照本教程的格式记录：配置文件、参数中文注释、执行命令、验证结果、问题处理。
+
+现在先确认两件事
+1. 你的三台 Rocky Linux 虚拟机分别准备分配多少内存？
+这个直接决定后续 Hadoop、Spark、Kafka 等组件的内存配置。
+
+2. 目前是否已经创建好三台 Rocky Linux 9.8？
+你可以先把 master 的以下命令输出发给我：
+free -h
+lsblk
+ip -br addr
+cat /etc/rocky-release

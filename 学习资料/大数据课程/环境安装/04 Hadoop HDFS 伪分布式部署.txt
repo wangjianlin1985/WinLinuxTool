@@ -1,0 +1,537 @@
+本课有几个必须遵守的约定：
+1. 不使用 localhost，统一使用主机名 master。
+2. 大数据运行用户统一使用 dsj_admin，不使用 root 启动 Hadoop。
+3. Hadoop 版本采用 3.5.x。
+4. NameNode RPC 端口使用 8020，不使用 9000。
+5. 软件统一安装到 /usr/local/bigdata/。
+6. HDFS 数据统一存放到 /data/hadoop/。
+7. 所有环境变量统一放到 /etc/profile.d/bigdata.sh。
+8. A 方案先部署单机伪分布式，后续 B 方案扩展为 master、worker1、worker2 三节点分布式。
+
+四、创建统一软件目录和数据目录
+这一步开始正式部署 Hadoop。
+1. 创建软件目录
+使用 root 执行：
+mkdir -p /usr/local/bigdata
+
+2. 创建 Hadoop 数据目录
+mkdir -p /data/hadoop/namenode
+mkdir -p /data/hadoop/datanode
+
+3. 创建 Hadoop 日志目录
+mkdir -p /data/hadoop/logs
+
+4. 设置目录权限
+chown -R dsj_admin:dsj_admin /usr/local/bigdata
+chown -R dsj_admin:dsj_admin /data/hadoop
+
+5. 查看目录
+tree -L 3 /usr/local/bigdata
+tree -L 3 /data/hadoop
+
+预期目录：
+/usr/local/bigdata/
+└── hadoop/
+
+/data/hadoop/
+├── namenode/
+├── datanode/
+└── logs/
+如果没有 tree 命令，可以执行 dnf install -y tree 安装。
+注意：软件目录与数据目录分开，是为了将来升级 Hadoop 时，不会误删 HDFS 数据。
+
+五、下载 Hadoop 3.5.0
+固定版本：3.5.0
+官方发布页面：
+Apache Hadoop 3.5.0 官方发布页面官方下载地址：
+https://dlcdn.apache.org/hadoop/common/hadoop-3.5.0/hadoop-3.5.0.tar.gz
+
+建议使用 dsj_admin 用户操作。
+1. 切换用户
+su - dsj_admin
+
+2. 进入软件目录
+cd /usr/local/bigdata
+
+3. 下载 Hadoop
+wget https://dlcdn.apache.org/hadoop/common/hadoop-3.5.0/hadoop-3.5.0.tar.gz
+
+如果没有 wget：
+sudo dnf install -y wget
+
+4. 解压
+tar -zxvf hadoop-3.5.0.tar.gz
+
+5. 统一目录名称
+ln -s hadoop-3.5.0 hadoop
+
+最终目录：
+/usr/local/bigdata/
+├── hadoop -> hadoop-3.5.0
+└── hadoop-3.5.0/
+
+6. 验证版本
+/usr/local/bigdata/hadoop/bin/hadoop version
+预期：
+Hadoop 3.5.0
+
+六、配置 Hadoop 环境变量
+我们不新建其他环境变量文件，继续使用你已经确定的：
+/etc/profile.d/bigdata.sh
+
+1. 编辑环境变量
+使用 root：
+vi /etc/profile.d/bigdata.sh
+
+在原有内容后面追加：
+# ==========================================
+# Hadoop 3.5.0
+# ==========================================
+
+export HADOOP_HOME=/usr/local/bigdata/hadoop
+
+# Hadoop 配置文件目录
+export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+
+# Hadoop 可执行程序目录
+export PATH=$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$PATH
+
+原来的 Java、Python 配置全部保留。
+
+2. 重新加载环境变量
+source /etc/profile.d/bigdata.sh
+
+3. 验证
+echo $JAVA_HOME
+echo $PYTHON_HOME
+echo $HADOOP_HOME
+echo $HADOOP_CONF_DIR
+
+预期：
+/usr/local/bigdata/jdk
+/usr/bin
+/usr/local/bigdata/hadoop
+/usr/local/bigdata/hadoop/etc/hadoop
+
+
+七、配置 Hadoop 的 JAVA_HOME
+切换到大数据用户：
+su - dsj_admin
+进入 Hadoop 配置目录：
+cd $HADOOP_HOME/etc/hadoop
+编辑：
+vi hadoop-env.sh
+找到 JAVA_HOME 配置项，设置为：
+export JAVA_HOME=/usr/local/bigdata/jdk
+同时建议明确配置 Hadoop 日志目录：
+export HADOOP_LOG_DIR=/data/hadoop/logs
+保存退出。
+
+验证：
+grep -n "JAVA_HOME" hadoop-env.sh
+为什么还要配置一次 JAVA_HOME？
+
+因为：
+- /etc/profile.d/bigdata.sh 主要负责用户登录后的环境变量。
+- hadoop-env.sh 负责 Hadoop 守护进程的运行环境。
+官方部署文档也要求明确配置 Hadoop 守护进程使用的 Java 环境。
+
+八、配置 core-site.xml
+这个配置文件主要负责指定 Hadoop 默认文件系统。
+编辑：
+vi $HADOOP_HOME/etc/hadoop/core-site.xml
+写入以下完整内容：
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+
+    <!-- ====================================== -->
+    <!-- HDFS 默认文件系统配置 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>fs.defaultFS</name>
+        <value>hdfs://master:8020</value>
+        <description>
+            指定 Hadoop 默认文件系统地址。
+            master 为 NameNode 所在主机。
+            8020 为本教程明确指定的 NameNode RPC 端口。
+            Hadoop 客户端通过此地址连接 HDFS。
+        </description>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- Hadoop 临时文件目录 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>hadoop.tmp.dir</name>
+        <value>/data/hadoop/tmp</value>
+        <description>
+            指定 Hadoop 临时文件存储目录。
+            将临时文件放在独立的数据目录中，
+            避免软件升级时误删。
+        </description>
+    </property>
+
+</configuration>
+
+创建临时目录：
+mkdir -p /data/hadoop/tmp
+
+确保目录归属正确：
+sudo chown -R dsj_admin:dsj_admin /data/hadoop
+
+这里有两个重点：
+参数	作用
+fs.defaultFS	指定默认 HDFS 地址
+hadoop.tmp.dir	指定 Hadoop 临时文件目录
+
+特别注意：
+hdfs://master:8020
+后续所有组件都使用这个 HDFS 地址。
+
+九、配置 hdfs-site.xml
+这是本课最重要的配置文件。
+它主要配置：
+- NameNode 元数据目录。
+- DataNode 数据块目录。
+- HDFS 副本数量。
+- NameNode RPC 端口。
+- HDFS Web 管理端口。
+编辑：
+vi $HADOOP_HOME/etc/hadoop/hdfs-site.xml
+写入：
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+
+    <!-- ====================================== -->
+    <!-- NameNode 元数据存储目录 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>dfs.namenode.name.dir</name>
+        <value>file:///data/hadoop/namenode</value>
+        <description>
+            NameNode 元数据存储目录。
+            保存 HDFS 文件系统命名空间、
+            文件目录结构和元数据信息。
+        </description>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- DataNode 数据块存储目录 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>dfs.datanode.data.dir</name>
+        <value>file:///data/hadoop/datanode</value>
+        <description>
+            DataNode 数据块存储目录。
+            HDFS 上传的实际文件数据会存储在这里。
+        </description>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- HDFS 数据副本数量 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>dfs.replication</name>
+        <value>1</value>
+        <description>
+            HDFS 数据副本数量。
+            A 方案只有一个 DataNode，因此设置为 1。
+            B 方案扩展到三个节点后可以调整为 3。
+        </description>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- NameNode RPC 地址 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>dfs.namenode.rpc-address</name>
+        <value>master:8020</value>
+        <description>
+            明确指定 NameNode RPC 服务监听地址。
+            本教程统一使用 master:8020。
+            覆盖 Hadoop 3.5 默认的 RPC 端口配置。
+        </description>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- NameNode Web 管理界面 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>dfs.namenode.http-address</name>
+        <value>master:9870</value>
+        <description>
+            NameNode Web 管理界面地址。
+            可以通过浏览器查看 HDFS 状态。
+        </description>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- DataNode 数据传输端口 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>dfs.datanode.address</name>
+        <value>master:9866</value>
+        <description>
+            DataNode 数据传输服务端口。
+        </description>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- DataNode Web 管理界面 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>dfs.datanode.http.address</name>
+        <value>master:9864</value>
+        <description>
+            DataNode Web 管理界面端口。
+        </description>
+    </property>
+
+
+    <!-- ====================================== -->
+    <!-- SecondaryNameNode Web 管理界面 -->
+    <!-- ====================================== -->
+
+    <property>
+        <name>dfs.namenode.secondary.http-address</name>
+        <value>master:9868</value>
+        <description>
+            SecondaryNameNode Web 管理界面端口。
+        </description>
+    </property>
+
+
+</configuration>
+
+本课 HDFS 端口汇总
+服务	端口	用途
+NameNode RPC	8020	HDFS 客户端连接
+NameNode HTTP	9870	NameNode Web
+DataNode Data	9866	数据块传输
+DataNode HTTP	9864	DataNode Web
+SecondaryNameNode HTTP	9868	SecondaryNameNode Web
+这些端口中，8020 是我们主动指定的，其他端口按照 Hadoop 3.5 对应的服务端口配置。
+
+十、配置 workers 文件
+这个文件用于指定 DataNode 所在的主机。
+编辑：
+vi $HADOOP_HOME/etc/hadoop/workers
+写入：
+master
+
+注意：
+这里不能写：
+localhost
+也不能写：
+127.0.0.1
+我们统一使用：
+master
+以后扩展到 B 方案时，只需要把 workers 改成：
+master
+worker1
+worker2
+这也是我们从 A 方案开始就统一主机名的原因。
+
+十二、检查全部配置
+先检查环境变量：
+echo $JAVA_HOME
+echo $HADOOP_HOME
+
+检查 Hadoop 版本：
+hadoop version
+
+检查配置文件：
+cat $HADOOP_HOME/etc/hadoop/core-site.xml
+cat $HADOOP_HOME/etc/hadoop/hdfs-site.xml
+cat $HADOOP_HOME/etc/hadoop/workers
+
+检查数据目录权限：
+ls -ld /data/hadoop/*
+
+检查 SSH：
+ssh master hostname
+预期返回：
+master
+
+检查 NameNode RPC 配置是否生效
+hdfs getconf -confKey fs.defaultFS
+预期：
+hdfs://master:8020
+
+检查：
+hdfs getconf -confKey dfs.namenode.rpc-address
+预期：
+master:8020
+如果这两项都正确，说明核心地址配置已经完成。
+
+十三、格式化 NameNode
+重要：只在首次部署时执行一次
+NameNode 首次启动之前，需要格式化元数据目录。
+使用 dsj_admin 用户执行：
+hdfs namenode -format
+正常情况下会出现类似：
+Storage directory /data/hadoop/namenode has been successfully formatted.
+
+验证目录：
+ls -lh /data/hadoop/namenode
+应该能看到：
+current/
+
+里面会生成：
+- VERSION：NameNode 存储版本信息。
+- fsimage_*：HDFS 文件系统元数据镜像。
+- seen_txid：事务 ID 信息。
+特别注意：以后重启 Hadoop 不需要再次格式化！
+再次执行格式化可能导致原有 HDFS 元数据丢失。
+
+十四、启动 HDFS
+执行：
+start-dfs.sh
+
+Hadoop 会启动：
+1. NameNode
+2. DataNode
+3. SecondaryNameNode
+
+等待一会儿。
+1. 查看 Java 进程
+jps
+预期能够看到：
+NameNode
+DataNode
+SecondaryNameNode
+Jps
+
+这三个 Hadoop 进程全部出现，说明 HDFS 基本启动成功。
+
+2. 查看监听端口
+ss -lntp | grep -E '8020|9870|9866|9864|9868'
+应该能够看到对应服务监听的端口。
+
+3. 查看 HDFS 报告
+hdfs dfsadmin -report
+重点关注：
+Live datanodes (1)
+说明当前有一个正常工作的 DataNode。
+
+十五、访问 Hadoop Web 管理界面
+打开 Windows 浏览器。
+查看 HDFS 集群状态
+http://192.168.79.10:9870
+
+DataNode Web UI
+http://192.168.79.10:9864
+
+SecondaryNameNode Web UI
+http://192.168.79.10:9868
+
+NameNode 页面重点查看：
+- Overview
+- Configured Capacity
+- DFS Used
+- Live Nodes
+- Dead Nodes
+正常情况下应该只有一个 Live Node。
+
+十六、HDFS 基础操作测试
+现在我们真正使用 HDFS 存储数据。
+1. 查看 HDFS 根目录
+hdfs dfs -ls /
+
+2. 创建用户目录
+hdfs dfs -mkdir -p /user/dsj_admin
+
+3. 创建测试目录
+hdfs dfs -mkdir -p /bigdata/test
+
+4. 创建本地测试文件
+echo "Hello Hadoop HDFS 3.5.0" > ~/hdfs-test.txt
+
+5. 上传文件到 HDFS
+hdfs dfs -put ~/hdfs-test.txt /bigdata/test/
+
+6. 查看上传结果
+hdfs dfs -ls /bigdata/test
+预期：
+hdfs-test.txt
+
+7. 查看文件内容
+hdfs dfs -cat /bigdata/test/hdfs-test.txt
+预期：
+Hello Hadoop HDFS 3.5.0
+
+8. 查看文件详细信息
+hdfs dfs -stat "%n %b bytes" /bigdata/test/hdfs-test.txt
+
+9. 下载文件
+hdfs dfs -get /bigdata/test/hdfs-test.txt ~/hdfs-download.txt
+查看：
+cat ~/hdfs-download.txt
+
+10. 删除测试文件
+hdfs dfs -rm /bigdata/test/hdfs-test.txt
+至此，HDFS 的基本读写操作就完成了。
+
+十七、HDFS 常用管理命令
+以后可以把下面这些命令收录到你的 WinLinuxTool 命令库中。
+命令	说明
+start-dfs.sh	启动 HDFS
+stop-dfs.sh	停止 HDFS
+hdfs namenode -format	首次格式化 NameNode
+jps	查看 Hadoop Java 进程
+hdfs dfsadmin -report	查看 HDFS 集群状态
+hdfs dfs -ls /	查看 HDFS 根目录
+hdfs dfs -mkdir -p /test	创建 HDFS 目录
+hdfs dfs -put file /test/	上传文件
+hdfs dfs -get /test/file ./	下载文件
+hdfs dfs -cat /test/file	查看文件内容
+hdfs dfs -rm /test/file	删除文件
+hdfs dfs -du -h /	查看目录空间占用
+
+十八、最终目录结构
+本课完成后，目录结构如下：
+/usr/local/bigdata/
+│
+└── hadoop -> hadoop-3.5.0/
+    │
+    └── hadoop-3.5.0/
+        ├── bin/
+        ├── sbin/
+        ├── etc/
+        │   └── hadoop/
+        │       ├── core-site.xml
+        │       ├── hdfs-site.xml
+        │       ├── hadoop-env.sh
+        │       └── workers
+        ├── lib/
+        └── share/
+
+/data/
+│
+└── hadoop/
+    ├── namenode/
+    ├── datanode/
+    ├── logs/
+    └── tmp/

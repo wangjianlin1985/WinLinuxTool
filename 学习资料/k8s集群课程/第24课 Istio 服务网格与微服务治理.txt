@@ -1,0 +1,590 @@
+这一课开始进入 Kubernetes 的一个重要进阶领域：服务网格（Service Mesh）。
+前面第1～23课，我们已经学习了 Kubernetes 的核心组件、网络、存储、调度、监控、安全、Helm、GitOps、CI/CD、高可用和企业级运维。
+但是，当 Kubernetes 集群里面运行几十个、几百个微服务时，又会出现一些新的问题：
+- 服务A如何安全地调用服务B？
+- 如何实现服务之间的双向 TLS 加密？
+- 如何限制某个服务的访问权限？
+- 如何实现灰度发布，例如让10%的用户访问新版本？
+- 如何统计每个微服务的请求量、响应时间和错误率？
+- 某个微服务出现故障，如何限制故障扩散？
+这些问题就是 Istio 主要解决的事情。
+
+一、什么是 Istio？
+Istio 是一个开源服务网格平台，可以帮助我们统一管理微服务之间的通信。
+简单理解：Kubernetes 负责管理容器，Istio 负责管理容器之间的通信。
+例如，我们在 Kubernetes 中部署了以下微服务：
+传统微服务架构
+
+		用户请求
+
+用户服务		订单服务		商品服务
+user-service	order-service	product-service
+
+服务之间直接通过 Kubernetes Service 通信
+传统情况下，服务之间的通信治理通常需要开发人员在每个微服务中编写代码，例如：
+- 重试机制
+- 超时控制
+- 熔断机制
+- 认证授权
+- 流量控制
+- 链路追踪
+服务越来越多，代码维护就越来越复杂。
+Istio 的思路是：把这些通信治理能力从业务代码中剥离出来，交给服务网格统一处理。
+
+二、Istio 的核心架构
+Istio 主要由两个核心部分组成：
+1. 数据平面（Data Plane）
+2. 控制平面（Control Plane）
+
+1. 数据平面：Envoy
+Istio 默认使用 Envoy 作为数据平面的代理组件。
+在传统 Sidecar 模式下，每个业务 Pod 旁边都会运行一个 Envoy 容器。
+例如：
+user-service Pod
+┌──────────────────────────────┐
+│                              │
+│  ┌──────────────────────┐    │
+│  │  user-service        │    │
+│  │  业务容器             │    │
+│  └──────────────────────┘    │
+│                              │
+│  ┌──────────────────────┐    │
+│  │  Envoy Proxy         │    │
+│  │  Sidecar代理         │    │
+│  └──────────────────────┘    │
+│                              │
+└──────────────────────────────┘
+
+Envoy 负责处理微服务之间的网络通信，例如：
+- 请求转发
+- 流量控制
+- TLS 加密
+- 重试和超时
+- 访问控制
+- 指标收集
+注意：现在 Istio 也支持 Ambient 模式，不必给每个 Pod 注入 Sidecar，后面我们会讲。
+
+2. 控制平面：istiod
+istiod 是 Istio 的核心控制平面组件。
+
+它主要负责：
+- 服务发现
+- 配置管理
+- 证书管理
+- 向 Envoy 下发流量规则
+- 管理代理的运行配置
+可以这样理解：
+组件		作用
+istiod		管理和配置
+Envoy		实际处理网络流量
+Kubernetes	管理 Pod、Service 等资源
+
+三、Istio 与 Kubernetes 有什么区别？
+这个问题非常重要。
+对比项目	Kubernetes	Istio
+容器管理	是		否
+Pod 调度	是		否
+服务发现	是		增强服务通信治理
+负载均衡	Service		更细粒度流量管理
+TLS 加密	可自行配置	支持自动 mTLS
+灰度发布	需要其他方案配合	原生流量规则
+熔断重试	需要应用或其他组件	支持代理层治理
+链路追踪	需集成其他工具	提供集成能力
+记住：Istio 不是 Kubernetes 的替代品，而是建立在 Kubernetes 之上的服务通信治理平台。
+
+四、Istio 的核心功能
+这一部分是本课的重点，后面我们会通过实际实验来验证。
+1. 流量管理（Traffic Management）
+Istio 可以非常精细地控制服务流量。
+例如：
+现在有两个版本的订单服务：
+order-service-v1
+order-service-v2
+我们希望：
+- 90%的请求访问 v1。
+- 10%的请求访问 v2。
+- 测试稳定后，再逐渐提高 v2 的流量比例。
+这就是灰度发布（金丝雀发布）。
+
+Istio 主要使用两个资源对象：
+资源对象		作用
+VirtualService	定义流量如何路由
+DestinationRule	定义目标服务的版本、负载均衡和连接策略
+
+简单记忆：
+- VirtualService：决定请求去哪里。
+- DestinationRule：决定目标服务如何处理流量。
+例如，将90%的请求发送到 v1，10%发送到 v2：
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: order-service
+spec:
+  hosts:
+  - order-service
+  http:
+  - route:
+    - destination:
+        host: order-service
+        subset: v1
+      weight: 90
+    - destination:
+        host: order-service
+        subset: v2
+      weight: 10
+
+这里的 subset 需要配合 DestinationRule 定义。
+
+2. 服务安全（Security）
+传统情况下，两个微服务之间的通信可能是明文 HTTP。
+例如：
+user-service  ------HTTP------> order-service
+Istio 可以启用 mTLS（双向 TLS）。
+启用后：
+user-service  ------mTLS------> order-service
+双方不仅加密通信，还会验证对方的身份。
+Istio 可以自动管理工作负载证书，减少我们手动管理证书的工作。
+我们可以通过 PeerAuthentication 强制要求服务之间使用 mTLS。
+
+例如：
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: default
+spec:
+  mtls:
+    mode: STRICT
+STRICT 表示只接受 mTLS 流量。
+
+其他常见模式：
+模式		作用
+DISABLE		禁用 mTLS
+PERMISSIVE	同时允许明文和 mTLS
+STRICT		只允许 mTLS
+
+3. 故障治理（Resilience）
+假设：订单服务调用支付服务，但是支付服务响应特别慢。
+如果不加控制，就可能出现大量请求堆积，最终影响整个系统。
+Istio 提供了以下能力：
+功能		作用
+Timeout		请求超时控制
+Retry		请求失败后重试
+Circuit Breaking	熔断机制
+Fault Injection	故障注入测试
+
+例如：
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: order-service
+spec:
+  hosts:
+  - order-service
+  http:
+  - timeout: 3s
+    retries:
+      attempts: 2
+      perTryTimeout: 1s
+    route:
+    - destination:
+        host: order-service
+
+含义：
+- 请求总超时时间为3秒。
+- 最多尝试2次重试。
+- 每次尝试最多等待1秒。
+注意：重试并不适合所有请求，尤其是没有幂等性保障的支付、扣款等操作，不能简单地盲目重试。
+
+4. 监控与可视化（Observability）
+Istio 可以帮助我们观察微服务之间的通信情况。
+例如：
+- 哪个服务请求量最大？
+- 哪个服务响应最慢？
+- 哪个服务错误率最高？
+- 服务之间的调用关系是什么？
+常见配套工具：
+Kiali
+服务网格拓扑图、流量关系、配置检查。
+Prometheus
+采集监控指标、请求量、延迟、错误率。
+Grafana
+监控数据可视化、仪表盘。
+Jaeger
+分布式链路追踪，分析服务调用耗时。
+这几个工具组合起来，可以帮助我们分析整个微服务系统的运行状态。
+
+五、Istio 的两种数据平面模式
+这里需要了解一个重要的新知识。
+Sidecar 模式
+传统 Istio 架构，每个业务 Pod 注入一个 Envoy 代理。
+Pod A                    		    Pod B
+┌────────────┐         	┌────────────┐
+│ 业务容器	│        	│ 业务容器      	│
+│ Envoy代理     	│ ────> │ Envoy代理     	│
+└────────────┘         	└────────────┘
+优点：
+- 功能成熟。
+- 流量治理能力完整。
+- 每个工作负载拥有独立代理。
+缺点：
+- 每个 Pod 增加代理资源消耗。
+- Sidecar 注入和升级需要额外管理。
+
+Ambient 模式
+Istio 还提供了 Ambient Mesh 架构。
+它不需要给每个业务 Pod 注入 Sidecar。
+
+主要使用：
+- ztunnel：负责节点级的基础安全和 L4 流量处理。
+- Waypoint Proxy：负责需要 L7 治理的流量处理。
+
+简单对比：
+对比		Sidecar		Ambient
+代理部署		每个 Pod 一个	节点级 ztunnel
+Pod 注入		需要		不需要
+mTLS		支持		支持
+L7 流量治理	支持		通过 Waypoint
+资源管理		Sidecar 较多	可减少重复代理
+本课程先学习 Sidecar 模式。
+原因是它架构直观、学习资料丰富，适合先理解 Istio 的核心原理。后续可以再扩展 Ambient 模式。
+
+六、实战环境准备
+接下来进入真正的实验环节。
+结合你目前的 Kubernetes 环境：
+项目		当前配置
+操作系统		Rocky Linux 9.8
+Kubernetes	v1.37.2
+Master		k8s-master
+Node1		k8s-node1
+Node2		k8s-node2
+容器运行时	containerd 2.4.2
+网络插件		Calico
+Helm		v4.3.0
+好消息：Istio 1.31 官方支持 Kubernetes 1.37，因此你的集群版本可以用于本课实验。
+本课使用 Istio 1.31 系列，建议固定使用同一个版本的 istioctl 和安装配置，不要随意混用不同版本。
+
+七、安装 Istio
+第一步：下载 Istio
+在 k8s-master 上执行：
+cd /opt
+export ISTIO_VERSION=1.31.4
+curl -L https://istio.io/downloadIstio | ISTIO_VERSION=${ISTIO_VERSION} sh -
+进入目录：cd /opt/istio-1.31.4
+配置环境变量：
+echo 'export PATH=/opt/istio-1.31.4/bin:$PATH' >> /etc/profile
+source /etc/profile
+检查版本：istioctl version
+如果显示：client version: 1.31.4
+说明客户端安装成功。
+如果下载失败，可以先在 Windows 浏览器下载官方发行包，再传输到 Linux。
+注意安装时还需要拉取 Istio 镜像，你之前遇到过 Docker Hub 网络问题，因此这一步也要检查镜像仓库连通性。
+
+第二步：检查集群
+kubectl get nodes
+kubectl get pods -A
+确保三个节点全部 Ready，Calico 正常运行。
+
+第三步：安装 Istio
+Istio 	提供多种安装配置文件（Profile）。
+Profile	用途
+default	常规部署
+demo	功能演示和学习
+minimal	最小化安装
+ambient	Ambient 数据平面
+
+我们这次选择 demo，方便学习和测试。
+执行：istioctl install --set profile=demo -y     等待安装完成。
+检查：kubectl get pods -n istio-system
+
+正常情况下会看到类似：
+NAME                                  		 READY   STATUS
+istiod-xxxxxxxxxx-xxxxx                 	1/1     Running
+istio-ingressgateway-xxxxxxxxxx-xxxxx   1/1     Running
+
+其中：
+- istiod：控制平面。
+- istio-ingressgateway：入口网关。
+注意，demo 是学习配置，不要直接拿它作为生产环境安装配置。
+
+第四步：开启 Sidecar 自动注入
+执行：kubectl label namespace default istio-injection=enabled
+检查：kubectl get namespace default --show-labels
+应该看到：istio-injection=enabled
+这意味着：以后在 default 命名空间创建新的业务 Pod 时，Istio 会自动注入 Envoy Sidecar。
+
+注意：已经运行的旧 Pod 不会自动增加 Sidecar，需要重新创建。
+官方安装流程也采用命名空间标签实现自动注入。
+
+八、部署 Bookinfo 微服务项目
+这是 Istio 官方提供的经典教学项目，专门用于演示服务网格功能。
+它由四个微服务组成：
+微服务		功能
+productpage	商品页面
+details		商品详情
+reviews		商品评论
+ratings		商品评分
+其中 reviews 有三个版本：
+- reviews-v1
+- reviews-v2
+- reviews-v3
+我们将利用这三个版本学习灰度发布。
+
+第一步：部署项目
+进入 Istio 安装目录：cd /opt/istio-1.31.4
+部署：kubectl apply -f samples/bookinfo/platform/kube/bookinfo.yaml
+检查：kubectl get pods正常情况下，注入 Sidecar 后，Pod 会出现两个容器：
+NAME                              READY
+productpage-xxxx                  2/2
+details-xxxx                      2/2
+reviews-v1-xxxx                   2/2
+ratings-xxxx                      2/2
+
+这里的 2/2 表示：
+- 1个业务容器。
+- 1个 Envoy 代理容器。
+如果显示 1/1，就需要检查自动注入是否生效。
+
+查看容器：kubectl describe pod productpage-xxxx
+也可以执行：istioctl proxy-status
+查看 Envoy 代理的连接状态。
+
+第二步：访问 Bookinfo为了避免 VMware 环境没有 LoadBalancer 的问题，我们先使用端口转发。
+执行：kubectl port-forward svc/productpage 9080:9080  保持终端运行。
+在 Windows 浏览器访问：http://192.168.79.130:9080/productpage
+
+这里使用的是你之前配置的 Master IP。
+正常情况下可以看到 Bookinfo 商品页面。
+如果端口转发无法从 Windows 访问，检查本机防火墙以及 kubectl 监听地址。
+
+九、实战：实现微服务灰度发布
+这是本课最重要的实验之一。
+我们要实现：
+用户访问 reviews 服务
+
+VirtualService
+流量分配规则
+90%		10%
+reviews-v1	reviews-v3
+通过 Envoy 代理实现流量分配
+
+第一步：创建 DestinationRule
+创建文件：vi reviews-dr.yaml
+写入：
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: reviews
+spec:
+  host: reviews
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+  - name: v2
+    labels:
+      version: v2
+  - name: v3
+    labels:
+      version: v3
+
+应用：kubectl apply -f reviews-dr.yaml
+查看：kubectl get destinationrule
+解释：
+我们定义了三个服务子集：
+reviews
+  ├── v1
+  ├── v2
+  └── v3
+Istio 根据 Pod 的 version 标签识别不同版本。
+
+第二步：创建 VirtualService
+创建：vi reviews-vs.yaml
+写入：
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: reviews
+spec:
+  hosts:
+  - reviews
+  http:
+  - route:
+    - destination:
+        host: reviews
+        subset: v1
+      weight: 90
+    - destination:
+        host: reviews
+        subset: v3
+      weight: 10
+
+
+应用：kubectl apply -f reviews-vs.yaml
+查看：kubectl get virtualservice
+现在就完成了流量分配配置。
+
+第三步：验证灰度发布
+保持 Bookinfo 页面运行。
+多次访问：
+for i in {1..20}; do
+  curl -s http://127.0.0.1:9080/productpage > /dev/null
+done
+注意：上面命令只用于产生请求，不能直接证明流量分配比例。
+我们还需要观察 reviews 的实际访问情况。
+
+如果要观察页面版本差异，可以在浏览器中多次刷新 /productpage：
+- v1：不显示评分星级。
+- v2：显示黑色评分星级。
+- v3：显示红色评分星级。
+由于我们配置了90%和10%的权重，访问结果是概率分布，不保证每20次请求一定出现18次和2次。
+
+实验任务：
+把流量比例改成：
+- v1：50%
+- v3：50%
+再改成：
+- v1：0%
+- v3：100%
+观察页面变化。
+
+这就是 Kubernetes 中常见的灰度发布思路。官方文档也使用 VirtualService 和 DestinationRule 演示这种权重流量控制。
+
+
+十、实战：开启微服务双向 TLS（mTLS）
+接下来让服务之间的通信必须经过双向认证。
+创建：vi mtls.yaml
+内容：
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: default
+spec:
+  mtls:
+    mode: STRICT
+
+应用：kubectl apply -f mtls.yaml
+查看：kubectl get peerauthentication
+检查代理配置：istioctl proxy-config secret productpage-xxxx
+将 productpage-xxxx 替换成实际 Pod 名称。
+还可以查看 Istio 的认证策略：kubectl describe peerauthentication default
+现在 default 命名空间中的网格内工作负载将要求使用 mTLS 通信。
+注意：这项策略只约束进入受策略管理的工作负载的流量，网格外部客户端仍然需要通过适当的入口配置接入。
+
+十一、实战：安装 Kiali 可视化管理工具
+接下来我们安装 Kiali，观察整个微服务之间的调用关系。
+进入 Istio 目录：cd /opt/istio-1.31.4
+安装官方示例中的监控组件：kubectl apply -f samples/addons
+查看：kubectl get pods -n istio-system
+可能会看到：
+grafana
+kiali
+prometheus
+jaeger
+
+部分组件可能需要等待镜像下载。
+检查 Kiali：kubectl get svc -n istio-system kiali
+启动访问：istioctl dashboard kiali
+它会尝试打开 Kiali 页面；如果 Linux 没有图形浏览器，可以使用：
+kubectl port-forward -n istio-system svc/kiali 20001:20001
+然后在 Windows 浏览器打开：http://192.168.79.130:20001
+进入 Kiali 后，选择：
+Graph
+  ↓
+default
+  ↓
+Display
+  ↓
+Versioned app graph
+你就可以看到 Bookinfo 微服务的调用拓扑。
+
+你可以看到：
+- productpage 调用了 details。
+- productpage 调用了 reviews。
+- reviews 又调用 ratings。
+- 不同版本的服务之间存在流量分配关系。
+这就是服务网格可视化治理。
+更多官方安装及可视化说明可以参考 Istio Getting Started：https://istio.io/latest/docs/setup/getting-started/
+
+十二、Istio 常用运维命令
+这一部分建议加入你的 WinLinuxTool Linux 命令库。
+命令				说明
+istioctl version			查看 Istio 版本
+istioctl install --set profile=demo -y	安装 Istio Demo
+istioctl uninstall -y			卸载 Istio
+istioctl proxy-status		查看代理同步状态
+istioctl proxy-config all POD		查看 Envoy 完整配置
+istioctl analyze			分析 Istio 配置问题
+istioctl dashboard kiali		打开 Kiali 管理页面
+kubectl get virtualservice		查看虚拟服务
+kubectl get destinationrule		查看目标规则
+kubectl get gateway		查看 Istio Gateway
+kubectl get peerauthentication	查看双向 TLS 策略
+kubectl get authorizationpolicy	查看授权策略
+kubectl get pods -n istio-system	查看 Istio 组件
+
+十三、本课实验中容易遇到的问题
+结合你目前的 Rocky Linux + VMware 环境，特别注意以下几点。
+1. Pod 一直处于 ContainerCreating
+优先检查 Envoy 镜像是否拉取成功：kubectl describe pod POD名称
+查看 Events 中是否有 ImagePullBackOff。
+
+2. Pod 只有 1/1，没有 Envoy
+检查命名空间标签：kubectl get namespace default --show-labels
+如果标签没有生效：kubectl label namespace default istio-injection=enabled
+然后重新创建业务 Pod。
+
+3. istiod 正常，但是代理没有同步
+istioctl proxy-status
+再检查：istioctl analyze
+
+4. Windows 无法访问端口转发页面
+之前的 kubectl port-forward 默认只监听本机回环地址。
+在 Master 上执行时，应该使用：kubectl port-forward --address 0.0.0.0 svc/productpage 9080:9080
+Kiali 同理：kubectl port-forward --address 0.0.0.0 -n istio-system svc/kiali 20001:20001
+然后 Windows 访问：
+http://192.168.79.130:9080/productpage
+http://192.168.79.130:20001
+
+注意：这种监听方式仅建议在可信的实验网络中使用，不要把管理页面直接暴露到公网。
+
+十四、本课知识点总结
+学完第24课，你应该掌握以下知识：
+知识点		学习要求
+Istio 架构		理解控制平面和数据平面
+Envoy		理解 Sidecar 代理
+istiod		理解控制平面作用
+自动注入		掌握命名空间注入
+VirtualService	掌握流量路由
+DestinationRule	掌握服务版本划分
+灰度发布		实现90%和10%的流量分配
+mTLS		实现服务间双向认证
+故障治理		理解超时、重试、熔断
+Kiali		查看微服务调用拓扑
+Ambient		理解新一代数据平面架构
+
+十五、第24课课后实战任务
+下面这些任务建议你亲自在自己的三节点集群中完成。
+实战任务进度
+0/12 已完成
+[ ] 1. 安装 Istio 1.31.4，检查 istiod 和 Ingress Gateway
+[ ] 2. 开启 default 命名空间 Sidecar 自动注入
+[ ] 3. 部署 Bookinfo 四个微服务
+[ ] 4. 确认业务 Pod 均为 2/2 Ready
+[ ] 5. 通过浏览器访问 Bookinfo
+[ ] 6. 创建 DestinationRule，定义 reviews 的 v1、v2、v3
+[ ] 7. 创建 VirtualService，实现 90% / 10% 灰度发布
+[ ] 8. 将灰度比例调整为 50% / 50%，再调整为 0% / 100%
+[ ] 9. 开启 STRICT 模式 mTLS
+[ ] 10. 安装 Kiali、Prometheus、Grafana 等监控组件
+[ ] 11. 通过 Kiali 查看 Bookinfo 微服务调用关系
+[ ] 12. 使用 istioctl analyze 检查配置
+重置任务进度
+
+十六、官方学习资料
+建议把下面几个网址保存下来：
+1. Istio 官方快速入门 —— 安装和部署：https://istio.io/latest/docs/setup/getting-started/
+2. Istio 流量管理 —— VirtualService、DestinationRule：https://istio.io/latest/docs/concepts/traffic-management
+3. Bookinfo 官方实战 —— 微服务实验：https://istio.io/latest/docs/examples/bookinfo/
+4. Istio Ambient 模式 —— 新架构学习：https://istio.io/latest/docs/ambient/

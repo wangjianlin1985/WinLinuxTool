@@ -1,0 +1,154 @@
+好，我们就采用 默认方案 B：企业常见的成熟生态版本组合，统一以 JDK 17、Python 3.11 为基础。
+这次我会按照正式安装手册的方式带你搭建，不只是给你几条安装命令。每个组件都包含：
+1. 安装前准备及依赖检查。
+2. 软件下载安装及解压。
+3. 环境变量配置。
+4. 配置文件完整内容，重要参数逐项写中文注释。
+5. 启动、停止命令。
+6. Web UI 访问地址。
+7. 命令行验证及预期结果。
+8. 常见错误排查。
+9. 安装完成后的检查清单。
+
+两套环境都保留完整安装记录：
+- A 方案：一台 Rocky Linux 9.8 单机伪分布式。
+- B 方案：三台 Rocky Linux 9.8 真正分布式。
+先在 A 方案完成所有组件的安装和验证，再迁移到 B 方案。这样学习成本最低，也方便以后重装和复现。
+
+第一部分：统一软件版本规划
+1.1 软件版本锁定
+我建议采用以下版本作为第一版安装基线。这里优先考虑组件之间的 Java 兼容性、生态成熟度和后续学习价值，而不是一味追最新版本。
+软件	计划版本	主要用途
+OpenJDK	17 LTS	统一 Java 环境
+Python	3.11.x	PySpark、PyFlink
+Hadoop	3.5.0	HDFS、YARN、MapReduce
+Hive	4.1.0	数据仓库、Hive SQL
+Spark	4.0.1	批处理、SQL、Streaming
+HBase	2.6.7	分布式 NoSQL 数据库
+Kafka	4.0.x	消息队列、KRaft 集群
+Flink	2.0.x	实时流式计算
+ZooKeeper	3.9.x	HBase 协调服务
+MySQL	8.0.x	Hive Metastore 元数据库
+
+有几个版本选择需要特别说明：
+- Hadoop 3.5.0 是第一个正式完整支持 JDK 17 的 Hadoop 版本。
+  Apache Hadoop 3.5.0+1
+- Hive 4.1.x 支持 JDK 17，Hive 4.0.1 则以 JDK 8 为要求，因此不选 4.0.1。
+  apache/hive: Apache Hive · 
+- Spark 4.0 系列使用 JDK 17，Python 3.9 及以上。
+  AWS Big Data Blog
+- HBase 2.6 系列支持 JDK 17，但要注意 Hadoop 版本匹配，建议选择带 Hadoop 3 的发行包。
+- Flink 2.0 使用 JDK 17 作为推荐运行环境。
+重要： 这是一套待集成验证的版本基线，不代表 Apache 官方对所有组件组合都提供了完整的联合认证。
+尤其是 Spark/Hive 的 Hadoop 客户端依赖，以及 Flink/HBase Connector，需要在对应课程中做兼容性验证。
+
+另外，Kafka 4.x 已经采用 KRaft 架构，不再使用 ZooKeeper 管理 Kafka 元数据；
+但 HBase 仍然需要 ZooKeeper。这样我们可以分别学习两种不同的集群协调机制。
+
+1.2 统一软件安装目录
+两套方案都采用相同目录规范：
+/usr/local/bigdata
+│
+├── jdk-17/                  # Java JDK
+├── python3.11/              # Python（自行安装时使用）
+│
+├── hadoop/                  # Hadoop
+├── hive/                    # Hive
+├── spark/                   # Spark
+├── hbase/                   # HBase
+├── kafka/                   # Kafka
+├── flink/                   # Flink
+├── zookeeper/               # ZooKeeper
+│
+└── mysql/                   # MySQL（如采用独立安装）
+
+
+数据目录单独规划，避免软件升级时误删数据：
+/data/
+│
+├── hadoop/
+│   ├── namenode/
+│   └── datanode/
+│
+├── yarn/
+├── hbase/
+├── kafka/
+├── zookeeper/
+└── flink/
+
+
+环境变量统一放在：
+/etc/profile.d/bigdata.sh
+
+
+这样所有用户都可以按照统一规范加载环境变量。
+
+第二部分：两套环境的主机规划
+2.1 方案 A：单机伪分布式
+一台机器
+项目	配置
+主机名	master
+IP	192.168.79.10
+操作系统	Rocky Linux 9.8
+JDK	17
+Python	3.11
+Hadoop	单机伪分布式
+Spark	Standalone
+HBase	Pseudo-Distributed
+Kafka	单 Broker，另做三 Broker 实验
+Flink	Standalone
+Hive	Metastore + HiveServer2
+
+所有服务先在 master 上运行。
+
+2.2 方案 B：三节点分布式
+三台机器
+项目	master	worker1	worker2
+IP	.10	.11	.12
+NameNode	是	否	否
+DataNode	是	是	是
+ResourceManager	是	否	否
+NodeManager	是	是	是
+Hive Metastore	是	否	否
+HiveServer2	是	否	否
+Spark Master	是	否	否
+Spark Worker	是	是	是
+HMaster		是	否	否
+RegionServer	是	是	是
+Kafka Broker	是	是	是
+Flink JobManager	是	否	否
+Flink TaskManager	是	是	是
+ZooKeeper	是	是	是
+
+说明：这是教学集群的初始拓扑。生产环境通常会进一步拆分主节点、数据节点、元数据库和协调服务，
+并配置 NameNode HA、ResourceManager HA 等高可用架构。
+
+二、重新安排 20 课时
+课程主体不需要推翻，但我建议进一步优化阶段划分，让 A 方案的安装记录可以直接服务于 B 方案迁移。
+第一阶段：A 方案（第 1～15 课）
+课次	课程名称	主要内容
+01	大数据平台架构与环境准备	架构、版本、目录、系统规划
+02	SSH 免密与基础环境配置	用户、主机名、网络、SSH
+03	JDK 17 与 Python 环境部署	Java、Python、环境变量
+04	Hadoop HDFS 伪分布式部署	NameNode、DataNode、HDFS
+05	Hadoop YARN 与 MapReduce	ResourceManager、NodeManager
+06	Hive 数据仓库部署	Metastore、HiveServer2、SQL
+07	Spark 基础环境部署	Spark Standalone
+08	Spark SQL 与 PySpark 开发	RDD、DataFrame、SQL
+09	ZooKeeper 与 HBase 部署	ZooKeeper、HMaster、RegionServer
+10	HBase 数据模型与开发	RowKey、Region、Java API
+11	Kafka 消息队列部署	KRaft、Broker、Topic
+12	Kafka 与大数据组件集成	Kafka、Spark、HDFS
+13	Flink 实时计算环境部署	JobManager、TaskManager
+14	Flink DataStream 开发	Window、Checkpoint
+15	大数据综合项目实战	六大组件综合联调
+
+A 方案验收
+第 15 课结束时，完成所有组件的安装记录、配置文件备份和功能测试。
+第二阶段：B 方案（第 16～20 课）
+课次	课程名称	主要内容
+16	三节点集群基础环境准备	网络、SSH、用户、目录、环境
+17	Hadoop 真正分布式集群部署	HDFS、YARN 多节点
+18	Hive、Spark、HBase 分布式部署	服务角色拆分、集群迁移
+19	Kafka、Flink 分布式集群部署	多 Broker、Flink 多节点
+20	三节点集群综合验收	分布式任务、故障恢复、运维

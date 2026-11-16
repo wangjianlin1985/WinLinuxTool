@@ -1,0 +1,408 @@
+这一课开始从单个 Kubernetes 集群走向企业级 Kubernetes 平台。
+前面第1～21课，我们已经学习了 Kubernetes 的核心组件、应用部署、存储、网络、安全、监控、
+Helm、GitOps、Jenkins CI/CD，以及生产环境高可用和灾难恢复。现在要解决一个新的问题：
+如果一家公司有几十台甚至几百台服务器，运行着多个 Kubernetes 集群，应该如何统一管理？
+这就是第22课要学习的内容。
+
+一、为什么需要多集群管理？
+先回顾一下目前你的实验环境。
+你现在有一个 Kubernetes 集群：
+当前实验集群
+k8s-master
+Ready · Control Plane
+192.168.79.130
+
+k8s-node1
+Ready
+
+k8s-node2
+Ready
+一个集群，三个 Kubernetes 节点
+这种架构适合学习和中小型业务。
+
+但是企业可能有以下需求：
+- 北京机房运行一个 Kubernetes 集群。
+- 上海机房运行一个 Kubernetes 集群。
+- 成都机房运行一个 Kubernetes 集群。
+- 测试环境独立一个集群。
+- 生产环境独立多个集群。
+- 海外业务使用独立集群。
+例如：
+
+企业统一管理平台
+统一监控、权限、配置、应用发布
+
+北京集群	上海集群	成都集群
+生产环境	生产环境	测试环境
+Cluster-ACluster-B	Cluster-C
+这样就产生了多集群管理（Multi-Cluster Management）的需求。
+多集群不是把多个集群合并成一个集群，而是让多个独立集群能够统一管理、统一运维和协同工作。
+
+二、多集群管理的核心概念
+1. 什么是多集群？
+Multi-Cluster 就是多个 Kubernetes 集群共同组成一个管理体系。
+每个集群都有自己独立的：
+- kube-apiserver
+- etcd
+- Controller Manager
+- Scheduler
+- Worker Node
+- Pod、Service 等资源
+例如：
+集群	用途	说明
+Cluster-A	开发环境	开发人员测试
+Cluster-B	测试环境	自动化测试
+Cluster-C	生产环境	正式业务
+Cluster-D	灾备环境	备用业务
+每个集群可以独立运行，即使其中一个集群发生故障，也不必然影响其他集群。
+
+2. 多集群管理需要解决什么问题？
+主要有六个方面：
+管理内容	解决的问题
+统一部署	一次操作向多个集群发布应用
+统一监控	查看所有集群的 CPU、内存和节点状态
+统一日志	集中查看不同集群的应用日志
+统一权限	控制不同人员可以管理哪些集群
+统一网络	解决跨集群服务通信
+统一灾备	一个集群故障时，将业务切换到其他集群
+这些就是企业级 Kubernetes 平台的主要需求。
+
+三、常见多集群管理方案
+企业中有几种比较有代表性的方案。
+1. Kubernetes Federation（集群联邦）
+Kubernetes Federation，简称 KubeFed。
+它的设计思想是：建立一个中心管理层，通过中心管理层管理多个 Kubernetes 集群。
+例如：
+              Federation Control Plane
+                         |
+          +--------------+--------------+
+          |              |              |
+       Cluster-A      Cluster-B      Cluster-C
+          |              |              |
+        Pods           Pods           Pods
+
+主要用途：
+- 多集群资源统一管理。
+- 跨集群应用分发。
+- 多集群配置同步。
+注意：KubeFed 并不是 Kubernetes 内置的核心组件，实际选型时要考虑项目的维护状态和社区生态。现代企业也常使用其他多集群管理方案。
+2. Rancher
+Rancher 是非常值得学习的 Kubernetes 管理平台。它可以统一管理多个 Kubernetes 集群。
+主要功能：
+- 集群创建和管理。
+- 多集群统一监控入口。
+- 用户和角色权限管理。
+- 集群访问控制。
+- 应用部署。
+- 集群升级和运维。
+举个例子：
+你有三个集群：
+Cluster-A：开发环境
+Cluster-B：测试环境
+Cluster-C：生产环境
+安装 Rancher 后，可以通过一个 Web 页面管理这三个集群。
+不用每次都登录不同服务器执行 kubectl 命令。
+
+3. Karmada
+Karmada 是 CNCF 生态中的多集群编排项目。
+它主要解决多个 Kubernetes 集群之间的资源调度和应用分发问题。
+例如：
+             Karmada Control Plane
+                       |
+          +------------+------------+
+          |            |            |
+       Cluster-A    Cluster-B    Cluster-C
+          |            |            |
+        nginx         nginx         nginx
+
+你可以定义应用部署策略：
+- 在北京集群部署3个副本。
+- 在上海集群部署2个副本。
+- 在成都集群部署1个副本。
+Karmada 可以根据策略向多个成员集群分发资源。
+
+4. Open Cluster Management（OCM）
+Open Cluster Management，简称 OCM。
+它提供多集群生命周期管理、策略管理和应用分发等能力。
+重点概念：
+- Hub Cluster：管理中心。
+- Managed Cluster：被管理的集群。
+- Placement：决定资源部署到哪些集群。
+- Policy：定义集群策略。
+这四种方案不需要全部安装。 学习时理解各自解决的问题即可，后续可以重点实践 Rancher 和 Karmada。
+
+四、kubectl 如何管理多个 Kubernetes 集群？
+这是本课非常重要的基础知识。实际上，即使不安装 Rancher 或 Karmada，我们也可以通过 kubectl 管理多个集群。
+核心是：kubeconfig 配置文件和 Context（上下文）。
+1. 什么是 kubeconfig？
+我们之前一直使用：kubectl get nodes
+为什么 kubectl 知道应该连接哪台 Kubernetes Master？
+因为它默认读取：~/.kube/config
+这个文件保存了 Kubernetes 集群的连接信息，包括：
+- 集群 API Server 地址。
+- 身份认证信息。
+- 用户配置。
+- 当前使用的 Context。
+
+2. 查看当前集群
+kubectl config view
+查看当前 Context：kubectl config current-context
+查看所有 Context：kubectl config get-contexts
+
+3. 切换集群
+假设 kubeconfig 中配置了三个集群：
+cluster-a
+cluster-b
+cluster-c
+切换到 cluster-b：
+kubectl config use-context cluster-b
+然后：kubectl get nodes
+就会连接 cluster-b。
+
+4. 指定集群执行命令
+不切换当前 Context，也可以直接指定：
+kubectl --context=cluster-a get nodes
+kubectl --context=cluster-b get nodes
+kubectl --context=cluster-c get nodes
+
+5. 添加其他集群配置
+假设另一套集群已经生成了 kubeconfig 文件：
+kubectl config view --kubeconfig=/root/cluster-b.conf
+可以使用：export KUBECONFIG=/root/.kube/config:/root/cluster-b.conf
+然后：kubectl config get-contexts
+就可以看到合并后的上下文。
+注意：多个 kubeconfig 合并时要注意 Context、Cluster 和 User 的命名冲突。
+本节重点： 多集群管理并不一定需要专门的软件，kubectl 本身就具备管理多个集群的基础能力。
+
+五、企业级 Kubernetes 架构设计
+企业环境与个人实验环境有很大区别。
+企业不仅要考虑应用能不能运行，还要考虑：
+- 集群是否高可用。
+- 网络是否可靠。
+- 数据是否安全。
+- 权限是否隔离。
+- 是否支持灾难恢复。
+- 是否能够统一监控。
+- 是否能够自动化部署。
+1. 企业级整体架构
+下面是一种典型的企业多集群架构：
+可以将其划分为五个层次：
+层次		主要组件				作用
+管理层		Rancher、Karmada			多集群统一管理
+发布层		Jenkins、Argo CD、Helm		自动化部署
+集群层		Kubernetes			运行容器应用
+监控层		Prometheus、Grafana、Loki		监控和日志
+基础设施层	VMware、物理服务器、云服务器	提供计算和存储资源
+
+2. 控制平面高可用
+你目前的集群是：1 Master + 2 Worker
+对于学习环境已经足够。
+但是生产环境一般会考虑：
+          Kubernetes API
+                |
+       +--------+--------+
+       |        |        |
+    Master1  Master2  Master3
+       |        |        |
+       +--------+--------+
+                |
+             etcd HA
+                |
+       +--------+--------+
+       |        |        |
+     Node1    Node2    Node3
+这里需要理解几个重点：为什么通常选择3个 Master？
+因为 Kubernetes 控制平面通常使用 etcd 保存集群状态。
+etcd 使用 Raft 共识算法，需要多数成员存活才能正常提交变更。
+etcd 节点数量	最多允许故障
+1		0
+3		1
+5		2
+注意：这里说的是 etcd 成员故障容忍能力，不代表整个集群所有业务组件都自动具备同等高可用能力。
+
+3. 网络架构
+企业多集群通常还需要考虑：
+- 集群内部 Pod 网络。
+- Service 网络。
+- 集群之间的网络连通性。
+- 跨机房网络延迟。
+- DNS 服务发现。
+- 网络访问控制。
+例如：
+北京集群 192.168.10.0/24
+       |
+       | VPN / 专线
+       |
+上海集群 192.168.20.0/24
+
+两个集群可以通过 VPN 或专线通信。
+如果需要跨集群服务发现和流量管理，可以进一步学习：
+- Submariner
+- Istio
+- Cilium Cluster Mesh
+特别注意：多个集群的 Pod CIDR、Service CIDR 要合理规划，避免网段冲突。
+
+4. 统一监控和日志
+企业不能每次都登录不同集群查看监控。
+通常会建立集中监控平台：
+常见组件：
+组件		作用
+Prometheus	指标采集
+Grafana		监控可视化
+Alertmanager	告警通知
+Loki		日志存储与查询
+Fluent Bit		日志采集
+OpenTelemetry	可观测性数据采集
+
+例如，一个 Grafana 页面同时展示：
+- 北京集群 CPU 使用率。
+- 上海集群内存使用率。
+- 成都集群节点状态。
+- 所有集群 Pod 数量。
+- 各集群异常告警。
+这样就能实现统一运维。
+
+六、企业级 Kubernetes 的安全管理
+企业环境中，不能让所有人都使用 root 或 cluster-admin 权限。
+需要进一步完善权限体系。
+1. RBAC 权限隔离
+例如：
+用户	权限
+运维管理员	管理整个集群
+开发人员	管理指定 Namespace
+测试人员	查看和操作测试环境
+普通用户	只允许查看资源
+之前第13课学习过 RBAC，这里要进一步理解跨集群权限管理。
+每个集群都需要正确配置身份认证和授权，不能认为一个集群的 RBAC 会自动覆盖其他集群。
+
+2. 集群隔离
+生产环境和测试环境最好不要随意混用。
+例如：
+企业 Kubernetes 平台
+       |
+       +--- 开发集群
+       |
+       +--- 测试集群
+       |
+       +--- 预发布集群
+       |
+       +--- 生产集群
+       |
+       +--- 灾备集群
+这样可以减少测试操作对生产业务造成的影响。
+
+3. 密钥管理
+企业可能有大量：
+- 数据库密码。
+- SSH 私钥。
+- API Token。
+- TLS 证书。
+- 第三方服务密钥。
+除了 Kubernetes Secret，还可以学习：
+- HashiCorp Vault
+- External Secrets Operator
+- 云厂商 KMS
+注意：Kubernetes Secret 默认使用 Base64 编码，并不等于加密。生产环境还要考虑 etcd 静态数据加密、访问控制和密钥轮换。
+
+七、多集群故障切换与灾备
+这是企业级架构非常重要的一部分，也与第21课的高可用和灾难恢复衔接。
+假设：
+用户访问：www.example.com
+             |
+          DNS / LB
+             |
+       +-----+-----+
+       |           |
+    北京集群     上海集群
+    正常运行     备用业务
+
+如果北京集群出现严重故障，可以通过流量管理将用户请求切换到上海集群。
+
+但要注意：多集群不等于自动灾备。
+真正的灾备还需要考虑：
+1. 应用是否已经部署到备用集群。
+2. 数据库是否完成复制。
+3. 文件和持久化数据是否同步。
+4. DNS 或负载均衡是否能够切换。
+5. 备用集群是否有足够的计算资源。
+6. 故障切换后是否能够正常提供服务。
+需要掌握两个指标：
+- RPO（恢复点目标）：最多能容忍丢失多少时间的数据。
+- RTO（恢复时间目标）：最多允许业务中断多长时间。
+例如：
+指标	目标
+RPO	5分钟
+RTO	10分钟
+
+表示灾难发生时，目标是最多丢失5分钟的数据，并在10分钟内恢复业务。
+具体能否达到，需要依赖数据库复制、备份、切换流程和实际演练验证。
+
+八、本课实验任务：在现有集群中学习多集群管理
+结合你现在的 VMware 环境，我建议不要马上创建三套完整 Kubernetes 集群。
+先通过模拟配置掌握多集群管理的基础，然后再考虑部署 Rancher。
+实验一：掌握 kubectl Context
+在 k8s-master 执行：
+kubectl config get-contexts
+kubectl config current-context
+kubectl config view
+
+练习目标：
+- 理解 Cluster、User、Context。
+- 理解 kubeconfig 的作用。
+- 学会切换 Context。
+- 学会指定 Context 执行命令。
+实验二：模拟多个集群配置
+你可以先复制现有 kubeconfig，模拟另一套集群配置：
+cp /root/.kube/config /root/cluster-test.conf
+查看配置：kubectl config view --kubeconfig=/root/cluster-test.conf
+注意：这只是复制配置，并没有真正创建第二个 Kubernetes 集群。
+
+实验三：安装 Rancher
+重点实操
+后续可以在 VMware 中创建一台独立的 Rocky Linux 虚拟机，用于部署 Rancher。
+建议架构：
+虚拟机	用途	建议配置
+k8s-master	原有控制节点	保持现状
+k8s-node1	原有工作节点	保持现状
+k8s-node2	原有工作节点	保持现状
+rancher-server	多集群管理平台	4核、8GB、60GB
+
+学习目标：
+1. 安装 Rancher。
+2. 登录 Rancher Web 控制台。
+3. 导入现有 Kubernetes 集群。
+4. 在 Rancher 中查看节点和 Pod。
+5. 通过 Rancher 管理 Namespace。
+6. 理解集群注册和管理关系。
+正式安装时需要根据 Rancher 版本选择兼容的 Kubernetes 版本，并按照官方安装要求配置 TLS、域名和负载均衡。
+
+实验四：了解 Karmada 多集群调度
+这一部分先学习架构和 YAML 配置。
+目标是实现：
+Karmada
+   |
+   +--- Cluster-A
+   |
+   +--- Cluster-B
+   |
+   +--- Cluster-C
+
+通过统一的应用部署策略，让不同集群运行指定数量的应用副本。
+这部分属于进阶实验，可以在掌握 Rancher 后继续开展。
+
+九、第22课知识点总结
+知识点		掌握程度
+多集群管理概念	必须掌握
+kubeconfig 配置	必须掌握
+kubectl Context	必须掌握
+Rancher		重点掌握
+Karmada		了解并实践
+Open Cluster Management	了解
+多集群网络	理解
+企业级高可用架构	必须掌握
+统一监控和日志	必须掌握
+企业级安全隔离	必须掌握
+跨集群灾备	必须掌握
+
+我建议的学习顺序：
+先掌握 kubeconfig 和 Context，再部署 Rancher，最后学习 Karmada。不要一开始就同时安装多个多集群管理平台。

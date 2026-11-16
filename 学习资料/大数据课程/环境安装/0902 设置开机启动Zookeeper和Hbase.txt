@@ -1,0 +1,360 @@
+一、建议采用的服务架构
+统一使用 dsj_admin 用户运行服务，软件目录仍然放在 /usr/local/bigdata。
+systemd 服务		启动内容			依赖
+zookeeper.service		ZooKeeper		网络
+hbase.service		HMaster、RegionServer	Hadoop、ZooKeeper
+hive-metastore.service	Hive Metastore		MySQL
+hive-server2.service	HiveServer2		MySQL、Metastore
+hbase-thrift.service		Python 接口，9090		Hbase
+
+二、创建 ZooKeeper 服务
+创建服务文件：sudo vi /etc/systemd/system/zookeeper.service
+写入：
+[Unit]
+Description=Apache ZooKeeper
+After=network.target
+
+[Service]
+Type=forking
+
+User=dsj_admin
+Group=dsj_admin
+
+Environment="JAVA_HOME=/usr/local/bigdata/jdk"
+Environment="ZOOCFGDIR=/usr/local/bigdata/zookeeper/conf"
+Environment="ZOO_LOG_DIR=/data/zookeeper/logs"
+
+ExecStart=/usr/local/bigdata/zookeeper/bin/zkServer.sh start
+ExecStop=/usr/local/bigdata/zookeeper/bin/zkServer.sh stop
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+
+加载服务：sudo systemctl daemon-reload
+设置开机启动：sudo systemctl enable zookeeper
+启动：sudo systemctl start zookeeper
+检查：systemctl status zookeeper
+验证 ZooKeeper：zkServer.sh status
+应该显示：
+Mode: standalone
+
+三 创建 HBase 服务
+vi /etc/systemd/system/hbase.service
+写入：
+[Unit]
+Description=Apache HBase
+After=network.target hadoop.service zookeeper.service
+Requires=hadoop.service zookeeper.service
+
+[Service]
+Type=forking
+
+User=dsj_admin
+Group=dsj_admin
+
+Environment="JAVA_HOME=/usr/local/bigdata/jdk"
+Environment="HADOOP_HOME=/usr/local/bigdata/hadoop"
+Environment="HADOOP_CONF_DIR=/usr/local/bigdata/hadoop/etc/hadoop"
+Environment="HBASE_HOME=/usr/local/bigdata/hbase"
+Environment="HBASE_LOG_DIR=/data/hbase/logs"
+Environment="HBASE_PID_DIR=/data/hbase/tmp/pids"
+
+ExecStart=/usr/local/bigdata/hbase/bin/start-hbase.sh
+ExecStop=/usr/local/bigdata/hbase/bin/stop-hbase.sh
+
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+
+
+加载服务：systemctl daemon-reload
+设置开机启动：systemctl enable hbase
+启动 HBase：systemctl start hbase
+查看状态：systemctl status hbase
+
+检查 HBase 进程
+jps
+应该看到：
+NameNode
+DataNode
+SecondaryNameNode
+QuorumPeerMain
+HMaster
+HRegionServer
+
+5. 最终检查
+systemctl is-enabled mysql
+systemctl is-enabled hadoop
+systemctl is-enabled zookeeper
+systemctl is-enabled hbase
+systemctl is-enabled hive-metastore
+systemctl is-enabled hive-server2
+
+全部应该显示：
+enabled
+
+
+提醒： After= 只保证启动顺序，不代表 Hadoop 的 HDFS 已经完全就绪。
+上面这份配置适合先建立服务依赖关系；正式验证开机自动启动时，还要检查 HBase 是否成功连接 HDFS 和 ZooKeeper。
+如果你的 hadoop.service 是异步启动脚本，后续最好增加 HDFS 就绪检查，避免开机时 HBase 启动过早。
+建议完成后实际重启一次 master，验证整套大数据平台是否能自动恢复。
+
+
+四 如果你希望 Windows 或其他机器上的 Python 程序通过网络连接 HBase，那么还需要启动 HBase Thrift Server，默认监听 TCP 9090 端口。
+1、Python 连接 HBase 的架构
+Windows / Linux Python 程序
+HappyBase 客户端库
+↓
+TCP 9090
+HBase Thrift Server
+Python 与 HBase 之间的通信接口
+↓
+HBase RegionServer / HMaster
+↓
+HDFS /hbase
+
+你的 Python 程序不需要直接连接 ZooKeeper，也不需要直接连接 HDFS。
+
+2、启动 HBase Thrift Server（9090）
+Apache HBase 提供两种 Thrift 接口：
+- Thrift 1：thrift，HappyBase 使用这个接口。
+- Thrift 2：thrift2，不是 HappyBase 默认使用的接口。
+因此我们这里启动 Thrift 1。官方支持通过 hbase-daemon.sh start thrift 启动，默认端口就是 9090。
+
+2.1 手动启动测试
+先确保 HBase 已经启动：jps
+启动 Thrift Server：hbase-daemon.sh start thrift -p 9090 -b 0.0.0.0
+参数说明：
+参数	作用
+thrift	启动 Thrift 1 服务
+-p 9090	指定监听端口
+-b 0.0.0.0	允许其他机器连接
+检查进程：jps
+应该新增：ThriftServer
+检查端口：ss -lntp | grep 9090
+正常应该看到：LISTEN 0  ... 0.0.0.0:9090 ...
+
+2.2 创建 systemd 开机启动服务
+我们单独创建 hbase-thrift.service，不要把 Thrift 混进原来的 hbase.service。
+创建：sudo vi /etc/systemd/system/hbase-thrift.service
+写入：
+[Unit]
+Description=Apache HBase Thrift Server
+After=network.target hbase.service
+Requires=hbase.service
+
+[Service]
+Type=forking
+
+User=dsj_admin
+Group=dsj_admin
+
+Environment="JAVA_HOME=/usr/local/bigdata/jdk"
+Environment="HADOOP_HOME=/usr/local/bigdata/hadoop"
+Environment="HADOOP_CONF_DIR=/usr/local/bigdata/hadoop/etc/hadoop"
+Environment="HBASE_HOME=/usr/local/bigdata/hbase"
+Environment="HBASE_CONF_DIR=/usr/local/bigdata/hbase/conf"
+Environment="HBASE_LOG_DIR=/data/hbase/logs"
+Environment="HBASE_PID_DIR=/data/hbase/tmp/pids"
+
+ExecStart=/usr/local/bigdata/hbase/bin/hbase-daemon.sh start thrift -p 9090 -b 0.0.0.0
+
+ExecStop=/usr/local/bigdata/hbase/bin/hbase-daemon.sh stop thrift
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+
+注意：Requires=hbase.service 和 After=hbase.service 表示先启动 HBase，再启动 Thrift Server。
+加载配置：sudo systemctl daemon-reload
+设置开机自启动：sudo systemctl enable hbase-thrift
+启动：sudo systemctl start hbase-thrift
+检查：systemctl status hbase-thrift
+查看进程：jps
+应该看到：
+HMaster
+HRegionServer
+ThriftServer
+
+停止：sudo systemctl stop hbase-thrift
+
+3、Python 安装 HappyBase
+接下来可以在 Windows 11 上直接运行 Python，不需要在 Linux 上运行 Python。
+你的 Windows Python 只需要能够访问 Linux 的 192.168.79.10:9090。
+安装依赖：pip install happybase thrift
+如果使用虚拟环境，就在对应的虚拟环境中执行。
+
+4、Python 操作 HBase
+这里直接使用前面创建的 HBase 
+表：test:student
+列族：info
+
+4.1 编写 Python 测试程序
+新建：hbase_test.py
+写入内容：
+import happybase
+
+# =====================================
+# 1. 连接 HBase Thrift Server
+# =====================================
+
+connection = happybase.Connection(
+    host='192.168.79.10',
+    port=9090,
+    timeout=10000
+)
+
+connection.open()
+
+print("HBase 连接成功！")
+
+
+# =====================================
+# 2. 查看所有数据表
+# =====================================
+
+tables = connection.tables()
+
+print("当前 HBase 数据表：")
+
+for table_name in tables:
+    print(table_name.decode())
+
+
+# =====================================
+# 3. 获取 student 表
+# =====================================
+
+table = connection.table('test:student')
+
+
+# =====================================
+# 4. 插入数据
+# =====================================
+
+table.put(
+    b'1003',
+    {
+        b'info:name': b'王五',
+        b'info:age': b'24',
+        b'info:sex': b'男'
+    }
+)
+
+print("数据插入成功！")
+
+
+# =====================================
+# 5. 查询指定行
+# =====================================
+
+row = table.row(b'1003')
+
+print("查询结果：", row)
+
+
+# =====================================
+# 6. 查询全部数据
+# =====================================
+
+print("所有学生数据：")
+
+for key, data in table.scan():
+    print(key, data)
+
+
+# =====================================
+# 7. 关闭连接
+# =====================================
+
+connection.close()
+
+print("HBase 连接已关闭！")
+
+
+运行：
+python hbase_test.py
+
+
+预期可以看到：
+HBase 连接成功！
+
+当前 HBase 数据表：
+test:student
+
+数据插入成功！
+
+查询结果：
+{
+    b'info:name': b'\xe7\x8e\x8b\xe4\xba\x94',
+    b'info:age': b'24',
+    b'info:sex': b'\xe7\x94\xb7'
+}
+
+实际输出的字节数据可能与上面展示的格式略有区别。
+
+4.2 Windows 测试端口
+在 Windows PowerShell 执行：Test-NetConnection 192.168.79.10 -Port 9090
+如果看到：TcpTestSucceeded : True
+说明 Windows 已经能够连接 Linux 的 HBase Thrift Server。
+如果 Linux 开启了 firewalld，还需要放行 9090：
+sudo firewall-cmd --permanent --add-port=9090/tcp
+sudo firewall-cmd --reload
+不要把 9090 暴露到公网，实验环境只开放给可信任的内网客户端。
+
+4.3 验证 Python 写入的数据
+回到 Linux：hbase shell
+执行：get 'test:student', '1003'
+
+应该看到：
+info:name  王五
+info:age   24
+info:sex   男
+
+这样就完成了：
+Windows Python → HappyBase → Thrift Server → HBase → HDFS 的完整数据操作链路。
+
+5、最终开机自启动服务清单
+现在你的大数据环境应该增加到以下服务：
+服务名称			作用		开机启动
+mysql.service		MySQL		enabled
+hadoop.service		Hadoop		enabled
+zookeeper.service		ZooKeeper	enabled
+hbase.service		HMaster、RegionServer	enabled
+hbase-thrift.service		Python 接口，9090	enabled
+hive-metastore.service	Hive Metastore	enabled
+hive-server2.service	HiveServer2	enabled
+
+最终启动依赖关系：
+MySQL
+3306
+↓
+Hadoop HDFS
+8020
+↓
+ZooKeeper
+2181
+↓
+HBase
+HMaster + RegionServer
+↓
+HBase Thrift Server
+9090
+Python / HappyBase
+
+Hive 的 Metastore 和 HiveServer2 则按照之前的 MySQL、Metastore 依赖关系启动，不需要依赖 HBase。
+
+最后执行：
+sudo systemctl enable hbase-thrift
+systemctl list-unit-files --type=service | grep -Ei 'hadoop|hive|mysql|zookeeper|hbase'
+
+大数据平台就不仅能通过 Hadoop 命令行、Hive SQL、HBase Shell 操作，还能通过 Python 程序直接进行 HBase 数据的增删改查了。

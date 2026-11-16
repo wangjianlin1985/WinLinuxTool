@@ -1,0 +1,488 @@
+前面第15课我们学习过 Kubernetes 集群安全加固、Pod 安全管理，第13课学习过 RBAC 权限管理，第14课学习过 NetworkPolicy 网络策略。
+但是企业生产环境还有一个非常重要的问题：
+如果有人上传了一个带有漏洞、恶意程序甚至后门的 Docker 镜像，然后把它部署到 Kubernetes 集群中，应该怎么办？
+这就是今天要学习的内容：企业级 Kubernetes 安全与镜像供应链安全。
+本课会结合你目前的 Rocky Linux 9.8 + Kubernetes v1.37.2 三节点集群进行实战。
+
+一、本课学习目标
+学完本课，你应该掌握以下内容：
+序号	学习内容			核心目标
+1	Kubernetes 安全体系	理解企业级集群安全架构
+2	镜像安全			防止使用存在漏洞的镜像
+3	Trivy 镜像扫描		扫描镜像中的安全漏洞
+4	镜像签名			使用 Cosign 验证镜像来源
+5	镜像仓库安全		私有仓库认证与访问控制
+6	Pod 安全策略		限制容器权限和危险操作
+7	Admission 准入控制		阻止不符合安全规则的 Pod
+8	企业安全流程		建立镜像从构建到部署的安全链路
+
+本课重点是实际操作，而不是只讲概念。
+二、企业 Kubernetes 安全体系
+先看一下企业生产环境中，一般需要保护哪些环节。
+企业级 Kubernetes 安全可以分为六个层面：
+安全层		主要保护内容
+主机安全		Linux 系统、SSH、内核、SELinux
+集群安全		API Server、etcd、证书
+身份认证		RBAC、ServiceAccount
+网络安全		NetworkPolicy、网络隔离
+容器安全		SecurityContext、Pod Security
+镜像供应链	镜像扫描、签名、可信来源
+我们重点学习最后两个方面，同时把它们与前面学过的知识结合起来。
+
+三、镜像供应链安全是什么？
+假设企业开发了一套 Java 微服务系统。整个过程可能是：
+① 开发人员编写 Java 代码
+Spring Boot 微服务项目
+	↓
+② Docker 构建镜像
+生成 application:v1.0
+	↓
+③ Trivy 安全扫描
+检查操作系统及软件包漏洞
+	↓
+④ Cosign 镜像签名
+证明镜像来源及完整性
+	↓
+⑤ 推送到镜像仓库
+Harbor / Docker Registry
+	↓
+⑥ Kubernetes 部署
+准入控制验证镜像安全规则
+
+这条链路叫作：
+Software Supply Chain Security（软件供应链安全）
+
+它解决的问题是：
+- 镜像有没有已知漏洞？
+- 镜像是不是来自可信来源？
+- 镜像有没有被篡改？
+- 开发人员有没有偷偷使用未经批准的镜像？
+- 容器运行时有没有获得过高权限？
+
+四、实战一：使用 Trivy 扫描 Docker 镜像
+Trivy
+开源漏洞扫描工具
+可扫描容器镜像、文件系统、代码仓库和 Kubernetes 配置。
+
+1. 安装 Trivy
+在 k8s-master 上执行：
+cat > /etc/yum.repos.d/trivy.repo <<'EOF'
+[trivy]
+name=Trivy repository
+baseurl=https://aquasecurity.github.io/trivy-repo/rpm/releases/$releasever/$basearch/
+gpgcheck=0
+enabled=1
+EOF
+
+安装：dnf install -y trivy
+检查：trivy --version
+如果你的 Rocky Linux 无法访问 Trivy 官方仓库，可以先不急着安装，后面也可以使用离线 RPM 包安装。
+
+2. 扫描 Nginx 镜像
+我们使用之前学习过的 Nginx 镜像：trivy image nginx:1.27
+扫描结果会包含类似信息：
+字段		含义
+Library		存在漏洞的软件包
+Vulnerability ID	漏洞编号
+Severity		漏洞等级
+Installed Version	当前安装版本
+Fixed Version	修复版本
+漏洞等级通常分为：
+- CRITICAL：严重
+- HIGH：高危
+- MEDIUM：中危
+- LOW：低危
+- UNKNOWN：未知
+
+3. 只扫描高危和严重漏洞
+trivy image \
+  --severity HIGH,CRITICAL \
+  nginx:1.27
+只显示存在漏洞的软件包：
+trivy image \
+  --scanners vuln \
+  --severity HIGH,CRITICAL \
+  nginx:1.27
+
+4. 扫描失败时返回非零状态码
+企业 CI/CD 流水线中，不能只显示漏洞，还要能够阻止不合格镜像进入生产环境。
+trivy image \
+  --exit-code 1 \
+  --severity HIGH,CRITICAL \
+  nginx:1.27
+如果发现指定等级的漏洞，Trivy 会返回非零退出码。
+这样 Jenkins 就可以根据扫描结果决定是否允许继续构建和部署。
+
+5. 扫描报告保存为 JSON
+trivy image \
+  --format json \
+  --output nginx-report.json \
+  nginx:1.27
+查看报告：less nginx-report.json
+实战重点
+企业中通常会把 Trivy 集成到 Jenkins：
+代码提交
+   ↓
+Maven 编译
+   ↓
+Docker 构建镜像
+   ↓
+Trivy 漏洞扫描
+   ↓
+是否通过安全检查？
+   ├── 否：停止流水线
+   └── 是：推送镜像仓库
+
+注意：漏洞扫描只能发现扫描器数据库已知的漏洞，并不能证明镜像绝对安全。
+
+五、实战二：镜像签名与 Cosign
+Cosign：容器镜像签名与验证工具
+为什么需要镜像签名？假设你的企业有一个经过扫描的镜像：nginx:v1.0
+有人下载镜像后修改了其中的程序，再重新推送到仓库。
+你如何判断这个镜像是不是原来的可信镜像？这就需要数字签名。
+1. Cosign 的工作原理
+可信镜像
+   ↓
+生成数字签名
+   ↓
+签名与镜像摘要关联
+   ↓
+上传镜像仓库
+   ↓
+部署前验证签名
+   ↓
+验证通过才能部署
+
+2. 安装 Cosign
+官方项目：Cosign GitHub
+可以通过官方发布的二进制文件安装。先查看架构：uname -m
+你的 Rocky Linux 通常是 x86_64，下载对应 Linux AMD64 版本。
+例如：
+COSIGN_VERSION=v3.0.0
+curl -L \
+  -o /usr/local/bin/cosign \
+  "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+chmod +x /usr/local/bin/cosign
+检查：cosign version
+如果该版本地址不可用，请以官方 Releases 页面公布的版本为准。
+
+3. 生成密钥对
+cosign generate-key-pair  会生成：
+cosign.key
+cosign.pub
+其中：
+文件	用途
+cosign.key	私钥，用来签名
+cosign.pub	公钥，用来验证签名
+注意：私钥必须严格保护，不能上传到 GitHub，也不能放在普通镜像仓库中。
+
+4. 签名镜像
+Cosign 通常对镜像的不可变摘要进行签名，而不是仅依赖可变的标签。
+例如：
+cosign sign --key cosign.key \
+  registry.example.com/myapp@sha256:镜像摘要
+
+5. 验证镜像
+cosign verify \
+  --key cosign.pub \
+  registry.example.com/myapp@sha256:镜像摘要
+验证通过，说明签名与镜像摘要匹配。
+这里先理解原理，后续第29课做完整 Java 微服务项目时，我们再把签名、镜像仓库和 Jenkins 串起来。
+
+六、实战三：Kubernetes Pod 安全管理
+这一部分要结合之前第15课学习的 Pod 安全管理。
+Kubernetes 提供了 Pod Security Standards（Pod 安全标准）。
+它将 Pod 安全等级分为三个级别：
+等级		说明		适用场景
+Privileged	不限制权限	特殊系统组件
+Baseline		基础安全限制	一般业务应用
+Restricted	严格安全限制	企业生产业务
+企业普通业务 Pod，尽量使用 Restricted。
+
+1. 创建安全测试 Namespace
+在 master 执行：kubectl create namespace security-lab
+给 Namespace 添加安全策略：
+kubectl label namespace security-lab \
+  pod-security.kubernetes.io/enforce=restricted \
+  pod-security.kubernetes.io/audit=restricted \
+  pod-security.kubernetes.io/warn=restricted
+查看标签：kubectl get namespace security-lab --show-labels
+这几个参数的作用：
+- enforce：不符合要求的 Pod 直接拒绝创建。
+- audit：记录违反策略的操作。
+- warn：向提交请求的用户发出警告。
+
+2. 测试不安全 Pod
+创建 YAML：vim unsafe-pod.yaml
+内容：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unsafe-pod
+  namespace: security-lab
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    securityContext:
+      privileged: true
+
+执行：kubectl apply -f unsafe-pod.yaml
+预期结果
+Pod 创建失败，提示违反 Pod Security Standard 的 restricted 策略。
+原因：privileged: true
+表示容器以特权模式运行，权限过高。
+企业生产环境中，普通业务容器不应该随意开启特权模式。
+
+3. 创建符合安全要求的 Pod
+新建：vim secure-pod.yaml
+内容：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-pod
+  namespace: security-lab
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "sleep 36000"]
+
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+        - ALL
+      readOnlyRootFilesystem: true
+
+执行：kubectl apply -f secure-pod.yaml
+查看：kubectl get pods -n security-lab
+如果镜像能够正常拉取，Pod 应该进入 Running 状态。
+
+这里几个重要参数：
+参数			作用
+runAsNonRoot		禁止以 root 用户运行
+runAsUser		指定容器运行 UID
+runAsGroup		指定容器运行 GID
+allowPrivilegeEscalation	禁止权限提升
+capabilities.drop		删除 Linux 所有额外能力
+readOnlyRootFilesystem	根文件系统只读
+seccompProfile		使用默认系统调用过滤配置
+注意：readOnlyRootFilesystem 会导致应用不能直接写入容器根文件系统，需要根据实际应用把可写目录挂载到 emptyDir 或持久化卷。
+如果 busybox 镜像拉取失败，不要为了完成实验而关闭安全策略，可以先检查镜像仓库和节点拉取配置。
+
+七、实战四：镜像仓库认证与访问控制
+企业通常不会让所有业务直接从 Docker Hub 拉取镜像，而是使用私有镜像仓库。常见方案：
+Harbor
+企业级私有镜像仓库
+
+Harbor 可以提供：
+- 镜像存储。
+- 用户认证。
+- 项目权限管理。
+- 镜像漏洞扫描。
+- 镜像复制。
+- 镜像签名及制品管理相关能力（具体取决于版本和集成方案）。
+
+1. Kubernetes 创建仓库认证 Secret
+假设企业私有仓库地址：harbor.example.com
+创建 Secret：
+kubectl create secret docker-registry harbor-secret \
+  --docker-server=harbor.example.com \
+  --docker-username=test \
+  --docker-password='你的仓库密码' \
+  --docker-email=test@example.com \
+  -n security-lab
+
+查看：kubectl get secret -n security-lab
+
+2. Pod 使用私有仓库镜像
+apiVersion: v1
+kind: Pod
+metadata:
+  name: private-nginx
+  namespace: security-lab
+spec:
+  imagePullSecrets:
+  - name: harbor-secret
+
+  containers:
+  - name: nginx
+    image: harbor.example.com/library/nginx:1.27
+这里的 imagePullSecrets 就是让 Kubernetes 在拉取私有镜像时使用认证信息。
+
+注意：
+- 仓库地址、项目名、镜像名称必须真实存在。
+- Harbor 应正确配置 HTTPS 证书。
+- 不要把真实仓库密码提交到 Git。
+- Secret 默认使用 Base64 编码，不等于加密；生产环境还应配置 etcd 静态加密，并严格限制 Secret 的 RBAC 读取权限。
+
+八、实战五：企业级镜像准入控制
+前面 Trivy 扫描发现漏洞后，能够让 Jenkins 停止流水线。
+但是还有一个问题：如果有人绕过 Jenkins，直接执行 kubectl 部署一个不安全镜像，怎么办？
+这就需要 Admission Controller（准入控制器）。
+Kubernetes 的准入控制器会在 API Server 接收创建或修改资源的请求时进行检查。
+企业常见方案：
+Kyverno
+Kubernetes 原生策略引擎
+
+Kyverno 可以实现：
+- 禁止使用 latest 标签。
+- 限制镜像必须来自指定仓库。
+- 强制要求资源设置 CPU 和内存限制。
+- 禁止使用 privileged 特权容器。
+- 要求镜像具有可信签名。
+- 自动修改不符合规范的资源（取决于策略配置）。
+
+1. 安装 Kyverno（扩展实验）
+如果要进行这部分实验，可以使用 Helm 安装。
+添加仓库：helm repo add kyverno https://kyverno.github.io/kyverno/
+更新：helm repo update
+创建 Namespace：kubectl create namespace kyverno
+安装：
+helm install kyverno kyverno/kyverno \
+  -n kyverno
+检查：kubectl get pods -n kyverno
+等待相关 Pod 全部 Ready。
+你之前已经安装了 Helm 4.3.0，这里不需要再安装 Helm 3。Kyverno 的具体 Chart 版本和兼容性应以安装时仓库提供的信息为准。
+
+2. 禁止使用 latest 标签
+创建策略：vim disallow-latest.yaml
+写入：
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+spec:
+  validationFailureAction: Enforce
+  background: true
+
+  rules:
+  - name: check-image-tag
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+
+    validate:
+      message: "禁止使用 latest 镜像标签，请指定明确版本。"
+      pattern:
+        spec:
+          containers:
+          - image: "!*:latest"
+应用：kubectl apply -f disallow-latest.yaml
+查看：kubectl get clusterpolicy
+
+3. 测试策略是否生效
+创建一个测试 Pod：
+kubectl run bad-nginx \
+  --image=nginx:latest \
+  -n default
+预期：如果 Kyverno 策略已经成功加载并生效，创建请求会被拒绝。
+再尝试：
+kubectl run good-nginx \
+  --image=nginx:1.27 \
+  -n default
+预期：通过这条策略的镜像标签检查。
+
+注意：这个策略只是一个教学示例，实际生产环境还应考虑 initContainers、ephemeralContainers、镜像摘要、豁免规则和策略覆盖范围。
+镜像使用固定标签也不等于不可篡改，生产部署更推荐使用 SHA256 digest。
+
+九、企业生产环境的镜像安全规范
+这里总结一下企业真正落地时应该遵守的规范。
+安全规范		推荐做法
+镜像来源		只允许可信镜像仓库
+镜像标签		禁止使用 latest
+镜像版本		使用固定版本或 SHA256 摘要
+漏洞扫描		构建阶段执行 Trivy
+镜像签名		使用 Cosign
+私有仓库		使用 Harbor
+准入控制		使用 Kyverno 或 ValidatingAdmissionPolicy
+容器权限		禁止不必要的 root 和 privileged
+Secret 管理	限制访问并启用静态加密
+持续审计		定期检查漏洞、策略和权限
+
+另外，企业还需要关注 SBOM（软件物料清单）。
+SBOM 可以理解为镜像内部的软件清单，记录镜像中包含哪些软件包、依赖库及其版本。
+这样当某个开源组件出现严重漏洞时，企业就能快速定位哪些镜像受到影响。
+Trivy 也可以生成 SBOM，例如：
+trivy image \
+  --format cyclonedx \
+  --output nginx-sbom.json \
+  nginx:1.27
+
+十、本课实验任务与验收
+下面这些任务建议你在自己的三节点集群上完成。
+第26课实验验收清单
+0/8 已完成
+[ ] 1. 安装 Trivy，扫描 nginx:1.27 镜像
+能够查看 HIGH、CRITICAL 漏洞
+
+[ ] 2. 生成 Trivy JSON 漏洞报告
+生成 nginx-report.json
+
+[ ] 3. 安装 Cosign，生成密钥对
+理解私钥签名、公钥验证
+
+[ ] 4. 创建 security-lab Namespace
+配置 Restricted 安全等级
+
+[ ] 5. 测试不安全 Pod
+验证 privileged Pod 被拒绝
+
+[ ] 6. 创建安全 Pod
+验证非 root、只读根文件系统等配置
+
+[ ] 7. 创建 Harbor 认证 Secret
+理解私有镜像仓库认证机制
+
+[ ] 8. 安装 Kyverno 并测试策略
+验证禁止 latest 标签的策略
+
+实验完成后的清理
+如果只是做实验，可以删除测试资源：
+kubectl delete namespace security-lab
+kubectl delete clusterpolicy disallow-latest-tag
+
+如果不再需要 Kyverno：
+helm uninstall kyverno -n kyverno
+kubectl delete namespace kyverno
+
+注意不要删除你集群中其他课程仍然使用的资源。
+
+十一、本课知识总结
+今天重点掌握了四个工具：
+工具	主要作用
+Trivy	镜像漏洞扫描
+Cosign	镜像数字签名与验证
+Harbor	企业私有镜像仓库
+Kyverno	Kubernetes 安全策略与准入控制
+
+把它们组合起来，就可以形成一套企业级镜像安全体系：
+开发代码
+   ↓
+Docker 构建镜像
+   ↓
+Trivy 漏洞扫描
+   ↓
+生成 SBOM
+   ↓
+Cosign 镜像签名
+   ↓
+Harbor 私有仓库存储
+   ↓
+Kyverno 准入检查
+   ↓
+Kubernetes 部署
+   ↓
+运行时安全监控
+
+这也是后面企业 Java 微服务项目上云时会用到的安全流程。

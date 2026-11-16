@@ -1,0 +1,77 @@
+我们采用 kubeadm 部署方式，三台机器都安装三个组件，但它们的职责不同：
+组件	作用
+kubeadm	集群初始化、节点加入等集群管理工具
+kubelet	每个节点上的代理，负责管理本机 Pod 和容器
+kubectl	管理员使用的命令行工具，通过 API Server 管理集群
+
+安装分工：
+- Master（192.168.79.130）：安装三个组件。
+- Node1（192.168.79.131）：安装三个组件。
+- Node2（192.168.79.132）：安装三个组件。
+注意：这一步只是安装 Kubernetes 工具，还没有真正创建集群。后面会在 Master 上执行 kubeadm init，再让两个 Worker 执行 kubeadm join。
+
+第一步：添加 Kubernetes 软件仓库
+截至目前，Kubernetes 官方提供 v1.37 稳定版软件仓库。我们先统一使用 Kubernetes 1.37，三台机器必须使用相同的小版本系列，避免组件版本不一致。
+Rocky Linux 9 使用 DNF4，官方推荐使用 pkgs.k8s.io，不要再使用已经弃用的旧 yum.kubernetes.io 仓库。
+
+在 Master、Node1、Node2 三台机器上分别执行：
+cat > /etc/yum.repos.d/kubernetes.repo <<'EOF'
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.37/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v1.37/rpm/repodata/repomd.xml.key
+exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
+EOF
+
+这里有两个值得理解的地方：
+- baseurl：指定 Kubernetes 1.37 的 RPM 软件包仓库。
+- exclude：防止日常执行 dnf update 时意外升级 Kubernetes 组件。后面安装时会使用 --disableexcludes=kubernetes 临时放开限制。
+执行完后，三台机器分别运行：
+dnf makecache
+
+从输出最后一行：
+Metadata cache created.
+可以确认 Master 已经成功读取 Kubernetes 软件仓库，暂时没有看到报错。
+
+
+第二步：安装 Kubernetes 三个组件 
+dnf install -y kubelet-1.37.2 kubeadm-1.37.2 kubectl-1.37.2 --disableexcludes=kubernetes
+参数说明：
+- kubelet：节点代理，负责启动和管理 Pod。
+- kubeadm：负责初始化集群和加入节点。
+- kubectl：集群管理命令行工具。
+- --disableexcludes=kubernetes：允许本次安装忽略仓库中的 exclude 限制。
+
+安装完成后，检查版本：
+kubeadm version
+kubelet --version
+kubectl version --client
+
+第三步 规划确定 Kubernetes 网络地址
+Kubernetes 集群里需要区分三种网络：
+网络		规划地址		用途
+Node 网络	192.168.79.0/24	三台虚拟机之间通信
+Pod 网络		10.244.0.0/16	Pod 之间通信
+Service 网络	10.96.0.0/12	Kubernetes Service 虚拟 IP
+
+这里要理解：
+- Node 网络：就是你 VMware NAT 网络，已经配置好了。
+- Pod 网络：每个 Pod 会获得一个 Pod IP，不直接使用虚拟机的 IP。
+- Service 网络：给 Kubernetes Service 分配虚拟 IP，用于访问一组 Pod。 
+
+我建议继续使用 Calico + VXLAN，比较适合你当前 VMware NAT 三节点实验环境。
+
+不过在初始化前，需要确认一个重要问题：这两个网段有没有和你现有网络冲突。
+
+可以在 Master 执行：ip route  查询
+
+Calico 官方文档明确列出：3.33 经过 Kubernetes 1.35、1.36、1.37 的测试。因此我们选择 Calico v3.33.0，不需要使用旧教程里的 3.2x 版本。
+你的网络方案也可以继续采用：
+- CNI：Calico
+- 数据平面：VXLAN
+- Pod CIDR：10.244.0.0/16
+- Service CIDR：10.96.0.0/12
+- kube-proxy：先使用默认 iptables 模式
+另外，Calico VXLAN 节点之间需要允许 UDP 4789 通信。你的 VMware NAT 实验环境中，三台虚拟机之间需要能够互通这个端口。

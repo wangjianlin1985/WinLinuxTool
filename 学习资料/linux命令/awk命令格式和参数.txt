@@ -1,0 +1,123 @@
+基本格式：
+awk [参数] 'BEGIN{初始化} 条件{操作} END{结束处理}' 文件名
+
+awk 是 Linux 文本处理工具，擅长按列提取、条件筛选、数据统计、格式化输出。
+1. 常用参数速查
+参数	简要说明
+-F	指定字段分隔符
+-v	定义变量
+-f	从脚本文件读取 awk 程序
+-e	指定 awk 程序
+-b	按字节处理字符（GNU awk）
+
+2. 常用内置变量
+变量	简要说明
+$0	当前整行内容
+$1	第1列
+$2	第2列
+$NF	最后一列
+NF	当前行的字段数量
+NR	当前已读取的总行号
+FNR	当前文件的行号
+FS	输入字段分隔符
+OFS	输出字段分隔符
+RS	输入记录分隔符
+ORS	输出记录分隔符
+FILENAME	当前文件名
+ARGC	命令行参数数量
+ARGV	命令行参数数组
+
+3. 常用操作示例
+假设测试文件：/root/linux-text-lab/awk/students.txt
+
+文件内容：
+张三 18 90
+李四 20 85
+王五 19 95
+赵六 21 70
+
+| 简要名称 | 命令示例 | 命令说明 |
+|---|---|---|
+| 输出全部内容 | awk '{print}' students.txt | 输出所有行 |
+| 输出指定列 | awk '{print $1}' students.txt | 输出第1列 |
+| 输出多列 | awk '{print $1,$3}' students.txt | 输出第1列和第3列 |
+| 输出最后一列 | awk '{print $NF}' students.txt | 输出最后一列 |
+| 输出行号 | awk '{print NR,$0}' students.txt | 输出行号和内容 |
+| 指定分隔符 | awk -F: '{print $1}' /etc/passwd | 使用冒号分隔 |
+| 条件筛选 | awk '$3>90' students.txt | 筛选成绩大于90的行 |
+| 字符串匹配 | awk '$1=="张三"' students.txt | 筛选姓名为张三的行 |
+| 正则匹配 | awk '/张三/' students.txt | 匹配包含张三的行 |
+| 输出指定行 | awk 'NR==2' students.txt | 输出第2行 |
+| 输出行范围 | awk 'NR>=2 && NR<=3' students.txt | 输出第2至3行 |
+| 统计行数 | awk 'END{print NR}' students.txt | 统计总行数 |
+| 统计列数 | awk '{print NF}' students.txt | 输出每行字段数量 |
+| 统计总成绩 | awk '{sum+=$3} END{print sum}' students.txt | 计算成绩总和 |
+| 计算平均成绩 | awk '{sum+=$3} END{print sum/NR}' students.txt | 计算平均成绩 |
+| 输出最大值 | awk 'NR==1||$3>max{max=$3} END{print max}' students.txt | 查找最高成绩 |
+| 输出最小值 | awk 'NR==1||$3<min{min=$3} END{print min}' students.txt | 查找最低成绩 |
+| 格式化输出 | awk '{printf "%-8s %3d %3d\n",$1,$2,$3}' students.txt | 按指定格式输出 |
+| 自定义分隔符 | awk -v OFS="," '{print $1,$2,$3}' students.txt | 使用逗号连接输出字段 |
+| 跳过标题行 | awk 'NR>1{print $0}' students.txt | 跳过第一行 |
+
+4. BEGIN 和 END
+语法	简要说明
+BEGIN{}	正式读取文件之前执行
+{}	对每一行执行
+END{}	所有行处理完成后执行
+
+示例：awk 'BEGIN{print "姓名 成绩"} {print $1,$3} END{print "统计完成"}' students.txt
+执行顺序：
+1. BEGIN：打印表头。
+2. 中间部分：逐行读取并输出姓名和成绩。
+3. END：打印统计完成。
+
+5. 常用运算符
+运算符	简要说明
+==	等于
+!=	不等于
+>	大于
+<	小于
+>=	大于等于
+<=	小于等于
+&&	逻辑与
+\|\|	逻辑或
+!	逻辑非
+~	匹配正则表达式
+!~	不匹配正则表达式
++ - * / %	算术运算
+
+6. 高频实战示例
+统计日志中不同状态码的数量：
+awk '{count[$9]++} END{for(code in count) print code,count[code]}' access.log
+
+统计每个用户的出现次数：
+awk '{count[$1]++} END{for(user in count) print user,count[user]}' users.txt
+
+筛选访问量大于100的记录：
+awk '$2>100 {print $1,$2}' numbers.txt
+
+格式化输出磁盘使用信息：
+df -h | awk 'NR==1 || $5+0>80'
+
+统计文件中第三列的平均值：
+awk '{sum+=$3; count++} END{if(count>0) print sum/count}' students.txt
+
+7. 高频知识点记忆
+awk 高频速查：
+ $0：整行内容
+ $1、$2：指定列
+ $NF：最后一列
+ NF：列数
+ NR：行号
+ FNR：文件行号
+ -F：指定分隔符
+ BEGIN：开始处理
+ END：结束统计
+ print：输出
+ printf：格式化输出
+
+grep、sed、awk 三者区别：
+命令	核心用途		记忆方式
+grep	查找和过滤	找内容
+sed	修改和编辑	改内容
+awk	按列处理和统计	处理数据

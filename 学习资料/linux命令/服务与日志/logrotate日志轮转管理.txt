@@ -1,0 +1,63 @@
+logrotate 是Linux的日志轮转工具，用于按时间或文件大小切割日志、压缩旧日志、删除过期日志，防止日志文件无限增长。
+
+一、常用命令
+logrotate -d /etc/logrotate.conf	调试配置，只模拟执行，不实际修改日志
+logrotate -f /etc/logrotate.conf	强制执行日志轮转
+logrotate -v /etc/logrotate.conf	显示详细执行过程
+logrotate -d /etc/logrotate.d/nginx	调试 Nginx 日志轮转配置
+cat /etc/logrotate.conf	查看全局配置
+ls /etc/logrotate.d/	查看各服务的轮转配置
+cat /etc/logrotate.d/nginx	查看 Nginx 轮转配置
+logrotate -s /var/lib/logrotate/status /etc/logrotate.conf	指定轮转状态记录文件
+
+二、常见配置参数
+daily	每天轮转
+weekly	每周轮转
+monthly	每月轮转
+size 100M	日志达到 100 MB 时满足轮转条件
+rotate 7	保留 7 份旧日志
+compress	压缩旧日志，通常使用 gzip
+delaycompress	将压缩推迟到下一次轮转
+missingok	日志文件不存在时不报错
+notifempty	日志为空时不轮转
+create	轮转后创建新的日志文件
+copytruncate	复制日志后清空原文件，适用于不能重新打开日志文件的程序
+dateext	使用日期后缀命名旧日志
+maxsize 100M	超过指定大小时允许轮转，即使时间条件尚未满足；通常需要定期运行 logrotate 才能检查
+
+三、配置示例
+例如，为 Nginx 配置日志轮转：
+/var/log/nginx/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 nginx adm
+}
+
+含义：
+- 每天轮转一次。
+- 保留 7 份旧日志。
+- 压缩旧日志。
+- 日志文件不存在或为空时跳过。
+- 轮转后创建新日志，权限为 0640，所有者为 nginx，所属组为 adm。
+注意：用户和组必须符合实际系统环境，否则新日志文件可能创建失败。
+
+
+四、常用操作流程
+# 1. 查看配置
+cat /etc/logrotate.conf
+# 2. 调试配置，不实际轮转
+logrotate -d /etc/logrotate.conf
+# 3. 查看详细执行过程
+logrotate -v /etc/logrotate.conf
+# 4. 强制轮转（会实际操作日志）
+logrotate -f /etc/logrotate.conf
+# 5. 查看轮转状态
+cat /var/lib/logrotate/status
+注意： -d 只用于模拟调试；-f 会强制执行轮转，可能重命名、压缩日志或创建新文件，操作前应确认配置正确。
+
+五、自动执行机制
+CentOS 7 通常通过 /etc/cron.daily/logrotate 定期执行日志轮转，也可能由系统定时任务或其他调度方式执行。

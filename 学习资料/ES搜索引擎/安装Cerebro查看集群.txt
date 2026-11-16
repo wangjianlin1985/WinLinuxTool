@@ -1,0 +1,24 @@
+# 学习集群节点、主分片、副本分片： Cerebro 很直观。
+学习索引创建、增删改查、DSL 查询： Kibana 更合适，尤其是 Dev Tools。
+实际项目开发： 通常会同时使用 Kibana 和 Elasticsearch 的 API；Cerebro 属于可选的管理工具
+
+Cerebro项目地址：https://github.com/lmenezes/cerebro/releases/tag/v0.9.4
+
+解压后进入bin目录执行本来cerebro.bat启动就行，但是会遇到兼容问题需要设置如下启动参数后再执行cerebro.bat：
+set "JDK_JAVA_OPTIONS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-exports=java.base/sun.net.www.protocol.file=ALL-UNNAMED"
+
+
+参数解释：
+--add-opens=java.base/java.lang=ALL-UNNAMED
+Cerebro 0.9.4 使用的部分旧版 Java 框架，需要访问 Java 内部的类和方法。而从 Java 9 开始，Java 引入了模块系统，对这些内部 API 的访问增加了限制，因此出现报错。
+--add-opens	开放一个模块中的包，允许深层反射访问
+java.base		Java 的基础模块
+java.lang		包含 Class、ClassLoader、String 等核心类
+ALL-UNNAMED	允许所有未命名模块访问该包的非公开成员进行深层反射
+
+--add-exports=java.base/sun.net.www.protocol.file=ALL-UNNAMED
+它解决的是 Java 模块对内部包的访问限制，Cerebro 已经成功启动并监听 9000 端口，但网页静态资源加载失败。 这是因为还需要开放另一个 Java 模块。
+--add-exports		将指定模块中的包额外导出给目标模块
+java.base	Java 		基础模块
+sun.net.www.protocol.file	JDK 内部的文件 URL 协议实现包
+ALL-UNNAMED		允许所有未命名模块访问导出的包

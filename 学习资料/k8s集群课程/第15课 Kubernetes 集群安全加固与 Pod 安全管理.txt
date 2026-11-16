@@ -1,0 +1,494 @@
+学习Kubernetes 的安全管理。前面第13课学习了 RBAC 权限管理，第14课学习了 NetworkPolicy 网络策略。
+今天把这两部分知识进一步扩展，学习如何保护 Kubernetes 集群、限制 Pod 的运行权限，以及防止容器逃逸和权限滥用。
+这部分内容非常重要，因为实际生产环境中，Kubernetes 不仅要保证应用能够运行，还必须保证应用不能随意访问宿主机、
+不能随意获取系统权限，也不能让普通用户拥有集群管理员权限。
+
+一、本课学习目标
+学完本课，你应该掌握：
+1. 理解 Kubernetes 集群安全体系。
+2. 理解 Pod Security Standards（PSS）。
+3. 掌握 Pod Security Admission（PSA）。
+4. 掌握 SecurityContext 安全上下文。
+5. 掌握 Linux 容器权限控制。
+6. 理解 Privileged 特权容器的安全风险。
+7. 掌握只读根文件系统、非 root 用户运行容器。
+8. 掌握 Kubernetes Secret 的安全使用。
+9. 能够对 Pod 进行基本安全加固。
+
+二、Kubernetes 集群安全体系
+先理解一个问题：
+假设你部署了一个 Nginx 应用：
+kubectl run nginx --image=nginx:1.27
+Pod 启动以后，容器里面的 Nginx 正常运行。
+
+但是，如果这个容器被攻击者利用，攻击者可能会尝试：
+- 获取容器内 root 权限。
+- 修改容器系统文件。
+- 访问宿主机目录。
+- 获取 Kubernetes API Token。
+- 访问其他 Pod。
+- 利用特权容器影响宿主机。
+因此，Kubernetes 安全不能只依靠 RBAC，还需要多个层面共同保护。Kubernetes 安全防护体系
+	集群访问安全
+认证 Authentication · 授权 Authorization · RBAC
+	↓
+	网络安全
+NetworkPolicy · Pod 网络隔离 · API Server 访问控制
+	↓
+	Pod 运行安全
+SecurityContext · PSS · PSA · Linux Capabilities
+	↓
+	数据与镜像安全
+Secret · 镜像可信 · 证书 · 最小权限
+
+记住：
+- RBAC：控制谁可以操作 Kubernetes。
+- NetworkPolicy：控制 Pod 之间如何通信。
+- SecurityContext：控制容器以什么权限运行。
+- PSS/PSA：控制允许创建什么安全级别的 Pod。
+
+三、Pod Security Standards（PSS）
+PSS 是 Kubernetes 提供的一套 Pod 安全标准。
+它将 Pod 的安全级别划分为三个等级。
+1. Privileged（特权级别）
+安全限制最少：允许 Pod 使用较高权限，基本不施加常规安全限制。
+例如：
+- 允许特权容器。
+- 允许访问部分宿主机资源。
+- 允许使用较多 Linux Capabilities。
+- 可以使用一些高风险配置。
+常见用途：
+- 节点监控。
+- 网络插件。
+- 存储插件。
+- 系统级 DaemonSet。
+普通业务应用一般不应该使用这个级别。
+
+2. Baseline（基线级别）
+中等安全限制：禁止一些明显危险的配置，但允许常见应用正常运行。
+例如：
+- 禁止 Privileged 特权容器。
+- 限制部分危险的 Linux Capabilities。
+- 禁止部分高风险 Host Namespace 配置。
+适合大多数普通应用的基础安全要求。
+
+3. Restricted（受限级别）
+安全限制最严格：要求 Pod 遵守更严格的安全配置。
+通常要求：
+- 容器不能使用 root 用户运行。
+- 必须设置 allowPrivilegeEscalation: false。
+- 必须使用 seccompProfile。
+- 只能使用允许的 Linux Capabilities。
+- 必须设置适当的安全上下文。
+- 根文件系统建议设置为只读。
+生产环境中，普通业务应用应尽量向 Restricted 标准靠拢。
+
+三种等级对比：
+安全等级	安全限制	典型用途
+Privileged	最少	系统组件
+Baseline		中等	普通应用基础防护
+Restricted	最严格	高安全要求的业务应用
+注意：Restricted 并不意味着所有应用配置都能直接运行，需要根据容器镜像和应用实际需求调整。
+
+四、Pod Security Admission（PSA）
+理解了 PSS，接下来学习 PSA。PSS 是安全标准，PSA 是 Kubernetes 用来执行这些标准的准入控制机制。
+简单理解：
+- PSS：规定 Pod 应该遵守什么安全规则。
+- PSA：在创建 Pod 时检查是否符合规则。
+PSA 有三个主要模式：
+模式	含义
+enforce	不符合规则，拒绝创建
+audit	不符合规则，记录审计信息
+warn	不符合规则，向用户发出警告
+
+例如：我们可以对 default 命名空间开启 Restricted 安全策略。
+第一步：给命名空间打标签
+kubectl label namespace default \
+pod-security.kubernetes.io/enforce=restricted
+
+再设置警告模式：
+kubectl label namespace default \
+pod-security.kubernetes.io/warn=restricted
+
+再设置审计模式：
+kubectl label namespace default \
+pod-security.kubernetes.io/audit=restricted
+
+查看标签：kubectl get namespace default --show-labels
+
+查看具体标签：kubectl describe namespace default
+现在这个命名空间中的 Pod 创建请求就会受到 Restricted 标准检查。
+
+第二步：测试一个不符合安全要求的 Pod
+创建测试文件：
+cat > /root/psa-test.yaml <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: psa-test
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+EOF
+
+执行：
+kubectl apply -f /root/psa-test.yaml
+你可能会发现创建失败，提示缺少：
+- runAsNonRoot。
+- allowPrivilegeEscalation。
+- seccompProfile。
+- capabilities。
+这就是 PSA 在发挥作用。
+
+注意：PSA 检查的是 Pod 安全配置，不是简单地检查容器当前是不是已经以 root 运行。
+另外，给 default 命名空间开启 Restricted 后，会影响这个命名空间中后续创建的所有 Pod，包括你之前课程创建的一些实验应用。
+
+如果想撤销本实验的策略：
+kubectl label namespace default \
+pod-security.kubernetes.io/enforce-
+
+kubectl label namespace default \
+pod-security.kubernetes.io/warn-
+
+kubectl label namespace default \
+pod-security.kubernetes.io/audit-
+实际生产环境建议先使用 warn 和 audit 观察，再逐步启用 enforce。
+
+五、SecurityContext：Pod 安全上下文
+这是本课最重要的实操知识之一。SecurityContext 可以控制 Pod 和容器运行时的安全权限。
+它主要解决几个问题：
+1. 容器是否允许使用 root 用户？
+2. 容器是否允许提升权限？
+3. 容器是否允许修改根文件系统？
+4. 容器是否允许使用额外的 Linux 权限？
+5. 容器是否使用安全的系统调用限制？
+1. runAsUser：指定运行用户
+Linux 中：
+- UID 0：root 用户。
+- UID 1000：普通用户。
+- UID 101：某些镜像中使用的 nginx 用户。
+例如：
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+含义：
+参数	作用
+runAsUser	指定容器运行 UID
+runAsGroup	指定容器运行 GID
+runAsNonRoot	禁止使用 root 用户运行
+注意：runAsNonRoot: true 并不会自动创建普通用户，它只是要求容器以非 root 身份启动。
+
+2. privileged：禁止特权容器
+例如：
+securityContext:
+  privileged: false
+
+privileged: true 意味着容器可以获得非常高的系统权限。
+危险示例：
+securityContext:
+  privileged: true
+
+这类容器可能对宿主机造成严重影响。
+普通业务容器一般应该保持：
+privileged: false
+
+3. allowPrivilegeEscalation：禁止权限提升
+securityContext:
+  allowPrivilegeEscalation: false
+意思是禁止容器进程通过某些机制提升自身权限。
+例如，防止利用 Linux 的 setuid 等机制获得额外权限。
+Restricted 安全级别要求这个值为 false。
+
+4. readOnlyRootFilesystem：只读根文件系统
+securityContext:
+  readOnlyRootFilesystem: true
+意思是容器的根文件系统只能读取，不能随意修改。
+例如：攻击者即使进入容器，也不能随意修改 /etc、/usr 等根文件系统中的文件。
+但有一个问题：有些应用需要写入 /tmp、日志目录、缓存目录。因此可以使用 emptyDir 提供临时可写目录：
+volumeMounts:
+- name: tmp
+  mountPath: /tmp
+
+volumes:
+- name: tmp
+  emptyDir: {}
+
+这样根文件系统只读，但是 /tmp 仍然可以写入。
+
+5. capabilities：Linux 能力控制
+Linux 有一套权限机制，称为 Capabilities。它将传统 root 用户的超级权限拆分成多个独立能力。
+例如：
+Capability	作用
+NET_ADMIN	网络管理权限
+NET_RAW	原始网络套接字
+SYS_ADMIN	大量系统管理权限
+CHOWN		修改文件所有者
+DAC_OVERRIDE	绕过部分文件权限检查
+普通应用不应该随意获得这些权限。
+可以使用：
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+意思是删除容器默认获得的所有 Linux Capabilities。
+如果确实需要某个能力，可以单独添加：
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+    add:
+    - NET_BIND_SERVICE
+这样只保留绑定特权端口所需的能力。
+
+6. seccompProfile：系统调用安全限制
+seccomp 是 Linux 内核提供的系统调用过滤机制。
+它可以限制容器进程能够调用哪些系统调用。
+例如：
+securityContext:
+  seccompProfile:
+    type: RuntimeDefault
+意思是使用容器运行时提供的默认 seccomp 配置文件。
+这也是 Restricted 安全标准要求的配置之一。
+
+六、实战：创建一个符合 Restricted 标准的 Pod
+现在我们在自己的 Kubernetes 集群上进行实操。本次创建一个安全加固的 BusyBox Pod。
+第一步：创建 YAML 文件
+cat > /root/secure-pod.yaml <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-pod
+  namespace: default
+spec:
+  containers:
+  - name: busybox
+    image: busybox:1.36.0
+    command: ["sh", "-c", "sleep 36000"]
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      seccompProfile:
+        type: RuntimeDefault
+EOF
+
+这里有几个重点：
+- 使用 UID 1000 运行。
+- 不允许提升权限。
+- 根文件系统只读。
+- 删除全部 Linux Capabilities。
+- 使用默认 seccomp 安全配置。
+
+第二步：创建 Pod
+kubectl apply -f /root/secure-pod.yaml
+查看：kubectl get pod secure-pod -o wide
+查看详细配置：kubectl describe pod secure-pod
+
+第三步：进入容器检查用户
+kubectl exec -it secure-pod -- id
+预期看到类似：uid=1000 gid=1000
+说明容器不是以 root 用户运行。
+
+第四步：测试根文件系统是否只读
+执行：kubectl exec secure-pod -- touch /test.txt
+预期：touch: /test.txt: Read-only file system
+说明只读根文件系统生效了。
+再测试临时目录：
+kubectl exec secure-pod -- touch /tmp/test.txt
+这里有一个细节：当前我们没有挂载独立的 /tmp，所以它同样无法写入。
+这也说明了为什么生产环境中需要根据应用需求，为临时目录配置 emptyDir。
+
+第五步：检查安全配置
+kubectl get pod secure-pod -o yaml
+重点查看：
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+    - ALL
+  seccompProfile:
+    type: RuntimeDefault
+至此，你已经完成了一个基本的安全加固 Pod。
+
+七、Pod 级别与 Container 级别的 SecurityContext
+这里容易混淆。Kubernetes 的 SecurityContext 可以配置在两个位置。
+Pod 级别：
+spec:
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    runAsNonRoot: true
+
+Container 级别：
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+
+两者的区别：
+配置			Pod 级别		Container 级别
+runAsUser		支持		支持
+runAsGroup		支持		支持
+runAsNonRoot		支持		支持
+privileged		不支持		支持
+readOnlyRootFilesystem	不支持		支持
+capabilities		不支持		支持
+seccompProfile		支持		支持
+
+一般来说：
+- Pod 级别配置适合统一设置运行用户、用户组等。
+- Container 级别配置适合控制单个容器的特殊权限。
+容器级别的同名配置通常可以覆盖 Pod 级别的对应配置。
+
+八、Secret 安全管理
+前面第5课我们已经学习过 ConfigMap 和 Secret。这里重点讲一下 Secret 的安全问题。
+创建 Secret：
+kubectl create secret generic db-secret \
+--from-literal=username=test \
+--from-literal=password=123456
+
+查看：kubectl get secret
+查看详细信息：kubectl describe secret db-secret
+查看 Base64 编码后的内容：kubectl get secret db-secret -o yaml
+可能看到：
+data:
+  password: MTIzNDU2
+  username: dGVzdA==
+解码：
+echo MTIzNDU2 | base64 -d
+结果：
+123456
+
+这里必须记住一个重要安全知识：
+Kubernetes Secret 默认的 Base64 编码不是加密！
+任何能够读取 Secret 的人，都可能将其解码。
+
+生产环境应该考虑：
+1. 使用 RBAC 限制 Secret 读取权限。
+2. 配置 Kubernetes etcd 静态数据加密。
+3. 避免将密码直接写进 YAML 文件并提交到 Git。
+4. 定期轮换密码和证书。
+5. 使用外部密钥管理系统管理重要凭据。
+
+九、ServiceAccount 安全管理
+还记得第13课学习的 ServiceAccount 吗？
+每个 Pod 可以使用 ServiceAccount 身份访问 Kubernetes API。
+如果 Pod 不需要访问 Kubernetes API，可以关闭自动挂载 Token。
+例如：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: no-api-pod
+spec:
+  automountServiceAccountToken: false
+  containers:
+  - name: busybox
+    image: busybox:1.36.0
+    command: ["sh", "-c", "sleep 36000"]
+
+创建：kubectl apply -f no-api-pod.yaml
+进入容器：kubectl exec -it no-api-pod -- sh
+检查：ls /var/run/secrets/kubernetes.io/serviceaccount/
+正常情况下，这个目录不会存在。
+这样可以减少攻击者通过容器获取 Kubernetes API Token 的风险。
+生产环境建议：不需要访问 Kubernetes API 的应用，尽量关闭 Token 自动挂载。
+
+十、Kubernetes 集群本身的安全加固
+前面主要讲的是 Pod，现在看看整个集群应该如何保护。
+1. API Server 安全
+API Server 是 Kubernetes 集群的核心入口。
+
+建议：
+- 限制 API Server 的网络访问范围。
+- 使用安全的 TLS 证书。
+- 启用认证与授权。
+- 使用 RBAC 最小权限原则。
+- 不要随意向普通用户授予 cluster-admin。
+查看 API Server：kubectl get pods -n kube-system
+查看 API Server 参数：cat /etc/kubernetes/manifests/kube-apiserver.yaml
+
+2. etcd 安全
+etcd 存储了 Kubernetes 集群的重要数据，包括：
+- Pod 配置。
+- Deployment 配置。
+- Secret 数据。
+- Service 配置。
+- RBAC 配置。
+所以需要保护 etcd：
+- 限制访问权限。
+- 使用 TLS 加密通信。
+- 配置静态数据加密。
+- 定期备份。
+- 保护 etcd 数据目录。
+
+3. Linux 宿主机安全
+你的 Rocky Linux 9.8 节点还需要注意：
+- 保持 SELinux Enforcing。
+- 不要随意关闭系统安全机制。
+- 定期更新系统补丁。
+- 限制 SSH 登录权限。
+- 使用强密码或 SSH 密钥认证。
+- 控制宿主机 root 权限。
+- 不随意使用 hostPath 和 privileged 容器。
+特别提醒：你目前集群的 SELinux 是 Enforcing，建议继续保持，不需要为了学习 Kubernetes 而关闭它。
+
+4. 镜像安全
+不要随便运行来源不明的镜像。
+建议：
+- 优先使用可信镜像仓库。
+- 固定镜像版本或使用镜像摘要 SHA256。
+- 定期扫描镜像漏洞。
+- 不要在镜像中硬编码密码。
+- 避免使用不必要的 root 用户运行应用。
+
+十一、本课知识总结
+把今天学习的内容串联起来：
+技术		解决的问题
+RBAC		谁可以操作 Kubernetes
+NetworkPolicy	哪些 Pod 可以相互通信
+PSS		Pod 应遵守什么安全标准
+PSA		如何在创建 Pod 时执行安全标准
+SecurityContext	容器应该以什么权限运行
+Capabilities	容器可以使用哪些 Linux 能力
+seccomp		限制容器可以使用哪些系统调用
+Secret		如何管理密码、Token 等敏感信息
+ServiceAccount	Pod 使用什么身份访问 API
+
+第15课需要记住的五条安全原则
+1. 普通业务容器尽量不要使用 root。
+2. 普通业务容器不要使用 privileged。
+3. 尽量删除不需要的 Linux Capabilities。
+4. 尽量使用只读根文件系统。
+5. 不需要访问 Kubernetes API 的 Pod 关闭 Token 自动挂载。
+
+十二、本课实验清理
+完成实验后，删除测试 Pod：kubectl delete pod secure-pod no-api-pod --ignore-not-found
+删除测试 Secret：kubectl delete secret db-secret --ignore-not-found
+删除 PSA 测试文件：
+rm -f /root/secure-pod.yaml
+rm -f /root/psa-test.yaml
+
+如果你已经给 default 命名空间开启了 PSA 策略，并且不准备继续测试，可以恢复：
+kubectl label namespace default \
+pod-security.kubernetes.io/enforce-
+
+kubectl label namespace default \
+pod-security.kubernetes.io/warn-
+
+kubectl label namespace default \
+pod-security.kubernetes.io/audit-
+
+注意：不要为了清理实验而删除 Kubernetes 系统命名空间中的资源。

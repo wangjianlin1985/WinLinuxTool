@@ -1,0 +1,89 @@
+jstack 是 JDK（Java Development Kit）自带的一个线程转储（Thread Dump）工具。你之前用它来排查 HiveServer2 启动卡住的问题，正是它的典型用途。
+jstack 能打印出指定 Java 进程内所有线程的当前状态和调用栈。简单说，就是给正在运行的 JVM 拍一张“快照”，让你看到每个线程此刻在做什么、卡在哪一行代码上。
+你之前那步操作的含义你执行的 jstack 4216 > /tmp/hs2.txt 做了两件事：
+    jstack 4216：对 PID 为 4216 的 Java 进程（即 HiveServer2）生成线程快照。
+    > /tmp/hs2.txt：将快照输出重定向保存到文件，方便后续用 grep、head 等命令分析。
+关键输出解读（结合你的场景）
+在 jstack 输出中，每个线程都有状态标识，常见的有：
+    RUNNABLE：正在运行或等待 CPU 时间片。
+    WAITING：无限期等待另一个线程唤醒。
+    TIMED_WAITING：有限期等待（如 sleep），时间到会自动继续。
+    BLOCKED：等待获取锁。
+你之前看到 main 线程处于 TIMED_WAITING (sleeping)，调用栈停在 HiveServer2.startHiveServer2 的 Thread.sleep 上。
+这说明主线程在启动过程中主动休眠等待，而不是死锁或崩溃，从而引导你去查日志找根因。
+
+常用排查场景
+    进程卡死/无响应：看哪个线程处于 BLOCKED 或长时间 WAITING。
+    CPU 飙高：结合 top -Hp <pid> 找到高 CPU 线程的 nid，再在 jstack 输出里定位对应线程的调用栈。
+    启动卡住：看主线程停在哪个初始化步骤（如你遇到的 HiveServer2 重试休眠）。
+使用前提
+jstack 需要与目标 JVM 同版本或兼容版本的 JDK，且通常要求与目标进程同一用户运行（否则可能因权限不足无法 attach）。你之前用 dsj_admin 用户成功执行，说明权限和版本都是匹配的。
+
+grep -n -B 5 -A 15 -m 1 "get_current_notificationEventId" /tmp/dsj_admin/hive.log
+日志明确提示：Not authorized to make the get_notification_events_count call.
+User dsj_admin is not allowed to perform this API call
+找到根本原因了，不是端口问题，而是 Hive Metastore 的通知事件接口权限校验失败。
+HiveServer2 使用 dsj_admin 调用 Metastore 的通知事件接口时，被权限校验拦截了。
+解决方法编辑：vi $HIVE_HOME/conf/hive-site.xml
+添加以下配置：
+<!-- 关闭 Metastore 通知事件 API 权限校验 -->
+<property>
+    <name>metastore.event.db.notification.api.auth</name>
+    <value>false</value>
+</property>
+这是关闭通知事件 API 的权限校验，适合当前单用户学习环境。
+添加后先不要启动 HiveServer2。 先重启 Metastore 服务，再启动 HiveServer2。
+
+你这条命令实际上做了三件事：
+HADOOP_CLIENT_OPTS="-Dhive.log.level=DEBUG -Dhive.root.logger=console" $HIVE_HOME/bin/hive --service hiveserver2 --hiveconf hive.server2.max.start.attempts=1
+
+参数	作用
+hive.log.level=DEBUG	将日志级别提高到 DEBUG
+hive.root.logger=console	将日志输出到控制台
+hive.server2.max.start.attempts=1	启动失败只尝试一次，避免反复等待
+
+所以之前不是没有错误，而是错误没有直接显示在启动终端中。这次我们终于看到了完整异常堆栈，并找到了真正原因。
+这也符合 Hive 官方文档关于控制日志级别和输出位置的说明。
+
+建议记住这个排错模板
+以后 HiveServer2 启动失败，先用：
+HADOOP_CLIENT_OPTS="-Dhive.log.level=DEBUG -Dhive.root.logger=console" $HIVE_HOME/bin/hive --service hiveserver2 --hiveconf hive.server2.max.start.attempts=1
+
+排错思路：
+1. 先让错误输出到控制台。
+2. 找异常栈中最底层的 Caused by。
+3. 根据真正原因修复，而不是盲目修改配置。
+4. 修复后重新启动，检查端口是否监听。
+这次还学到了一个很实用的经验：排查大数据组件，先解决日志可见性，再解决真正的故障。
+
+
+hive的运行怎么读取的日志输出级别参数怎么在HADOOP_CLIENT_OPTS中呢
+因为 HADOOP_CLIENT_OPTS 本质上是一个传递给 Java 虚拟机（JVM）的启动参数环境变量，而 Hive 本身也是 Java 程序。
+
+整个过程是这样的：
+1. Hive 启动时发生了什么？
+执行：$HIVE_HOME/bin/hive --service hiveserver2
+
+大致经过以下过程：
+    hive 是 Shell 启动脚本。
+    启动脚本读取环境变量 HADOOP_CLIENT_OPTS。
+    启动脚本将这些参数传递给 Java JVM。
+    Hive 的日志框架读取 JVM 系统属性，设置日志级别和输出位置。
+
+2. 为什么这两个参数能生效？
+-Dhive.log.level=DEBUG
+-Dhive.root.logger=console
+
+注意 -D 是 Java JVM 的系统属性设置语法。
+Hive 的 Log4j2 配置中会引用这些系统属性，例如：
+property.hive.log.level = ${sys:hive.log.level}
+因此，日志框架就能读取到我们传进去的 DEBUG。
+
+3. 为什么使用 HADOOP_CLIENT_OPTS？
+Hadoop 的启动脚本体系提供了这个环境变量，用来向 Java 客户端进程传递 JVM 参数。Hive 启动脚本也会利用 Hadoop 的启动机制，因此可以通过它传递参数。
+记住这个规律：
+    HADOOP_CLIENT_OPTS：传递 Hadoop 客户端 JVM 参数。
+    -Dxxx=yyy：设置 Java 系统属性。
+    hive.log.level：Hive 日志级别属性。
+    hive.root.logger：Hive 根日志输出方式属性。
+以后排查 Hadoop、Hive 这类 Java 大数据组件时，也可以用类似思路，通过 JVM 参数调整日志输出。

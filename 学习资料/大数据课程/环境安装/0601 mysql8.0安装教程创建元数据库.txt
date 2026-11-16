@@ -1,0 +1,236 @@
+本节在已经完成 Hadoop HDFS、YARN 和 MapReduce 部署的基础上，安装 Hive，并使用 MySQL 8.0 保存 Hive Metastore 元数据。
+这节课我们不仅要把 Hive 安装好，还要实际执行 Hive SQL，验证它能否通过 MySQL 管理元数据，并将数据存储在 HDFS 中。
+
+理解几个核心组件：
+- Hive：提供类似关系型数据库的 SQL 查询能力。
+- HiveServer2：负责接收客户端连接和 SQL 请求。
+- Metastore：管理数据库、表、字段、分区等元数据。
+- MySQL：真正保存 Metastore 的元数据。
+- HDFS：真正保存 Hive 表的数据文件。
+- YARN：负责管理 Hive 提交的计算任务（本课程采用 MapReduce 执行引擎）。
+特别注意：MySQL 保存的是表结构等元数据，不是 Hive 表中的实际业务数据。
+
+三、安装 MySQL 8.0
+这里采用 MySQL 官方 Generic Binary 二进制压缩包安装方式。
+这样有几个好处：
+1. MySQL 程序可以直接安装在 /usr/local/bigdata/mysql。
+2. 不会把 MySQL 程序散落到 /usr/bin、/usr/lib 等系统目录。
+3. 数据目录可以独立放在 /data/mysql。
+4. 后续迁移、备份和升级比较方便。
+MySQL 8.0.46 提供 Linux x86_64 通用二进制包，官方安装手册也提供了这种安装方式
+
+3.1 安装依赖
+先切换 root：su -
+MySQL 8.0.46 的客户端程序缺少系统动态库 libncurses.so.5，你的 Rocky Linux 9.8 默认可能只有较新版本的 ncurses 库
+启用 Rocky Linux 9 的 devel 仓库：dnf config-manager --set-enabled devel
+安装兼容库：dnf install -y ncurses-compat-libs
+安装依赖【不用这个】：dnf install -y wget curl tar xz libaio numactl-libs ncurses-compat-libs policycoreutils-python-utils
+验证动态库：ldconfig -p | grep libncurses.so.5
+正常应该能看到类似：libncurses.so.5 (libc6,x86-64) => /lib64/libncurses.so.5
+安装完成后可以关闭devel 仓库：dnf config-manager --set-disabled devel
+
+
+3.2 创建 MySQL 用户
+MySQL 不建议直接使用 root 运行。
+groupadd -r mysql
+useradd -r -g mysql -s /sbin/nologin mysql
+如果提示用户或组已经存在，可以跳过对应命令。
+
+3.3 下载 MySQL 8.0.46
+进入安装目录：cd /usr/local/bigdata
+下载官方二进制包：
+wget https://dev.mysql.com/get/Downloads/MySQL-8.0/mysql-8.0.46-linux-glibc2.17-x86_64-minimal.tar.xz
+这个是 Minimal 安装包，体积比完整包小很多。
+解压：tar -xf mysql-8.0.46-linux-glibc2.17-x86_64-minimal.tar.xz
+创建统一安装目录：
+ln -s mysql-8.0.46-linux-glibc2.17-x86_64-minimal mysql
+检查：
+ls -l /usr/local/bigdata/
+应该能看到：
+mysql -> mysql-8.0.46-linux-glibc2.17-x86_64-minimal
+最终访问路径：
+/usr/local/bigdata/mysql
+
+3.4 创建 MySQL 数据目录
+MySQL 程序和数据分开存放。
+mkdir -p /data/mysql
+chown -R mysql:mysql /data/mysql
+chmod 750 /data/mysql
+目录规划：
+/usr/local/bigdata/mysql/    MySQL 程序
+/data/mysql/                 MySQL 数据
+/etc/my.cnf                  MySQL 配置
+
+3.5 配置 MySQL
+编辑配置文件：
+vi /etc/my.cnf
+
+写入：
+[client]
+# MySQL 客户端连接套接字
+socket=/data/mysql/mysql.sock
+# 默认字符集
+default-character-set=utf8mb4
+
+[mysqld]
+# MySQL 安装目录
+basedir=/usr/local/bigdata/mysql
+
+# MySQL 数据目录
+datadir=/data/mysql
+
+# MySQL 运行用户
+user=mysql
+
+# MySQL 端口
+port=3306
+
+# 本机监听即可，A方案暂时不需要远程访问
+# bind-address=127.0.0.1
+# 为了windows的电脑可以连接mysql 这里还是监听所有网卡
+bind-address=0.0.0.0
+
+# Socket 文件
+socket=/data/mysql/mysql.sock
+
+# PID 文件
+pid-file=/data/mysql/mysqld.pid
+
+# 错误日志
+log-error=/data/mysql/mysql-error.log
+
+# 默认字符集
+character-set-server=utf8mb4
+
+# 默认排序规则
+collation-server=utf8mb4_0900_ai_ci
+
+# 最大连接数
+max_connections=200
+
+# InnoDB 缓冲池，考虑当前虚拟机内存限制
+innodb_buffer_pool_size=256M
+
+# 临时文件目录
+tmpdir=/tmp
+
+这里有几个重要参数：
+参数	作用
+basedir	MySQL 软件安装位置
+datadir	MySQL 数据存放位置
+port	MySQL 服务端口
+bind-address	MySQL 监听地址
+character-set-server	默认字符集
+innodb_buffer_pool_size	InnoDB 缓冲池大小
+
+当前是单机 A 方案，MySQL 只监听 127.0.0.1，后面扩展三节点时再考虑远程连接。
+但是为了windows也可以访问 我们监听0.0.0.0
+
+3.6 配置 SELinux【暂时不做这个】
+你之前的 Rocky Linux 环境使用的是 SELinux Enforcing，因此这里不关闭 SELinux。
+执行：semanage fcontext -a -t mysqld_db_t "/data/mysql(/.*)?"
+给 MySQL 可执行文件设置相应类型：
+semanage fcontext -a -t mysqld_exec_t "/usr/local/bigdata/mysql-8.0.46-linux-glibc2.17-x86_64-minimal/bin/mysqld"
+应用标签：
+restorecon -Rv /data/mysql
+restorecon -v /usr/local/bigdata/mysql-8.0.46-linux-glibc2.17-x86_64-minimal/bin/mysqld
+
+3.7 初始化 MySQL
+执行：
+/usr/local/bigdata/mysql/bin/mysqld \
+--defaults-file=/etc/my.cnf \
+--initialize \
+--user=mysql
+初始化成功后，会生成 root 临时密码。
+查看：grep 'temporary password' /data/mysql/mysql-error.log  记下临时密码。
+
+3.8 配置 MySQL systemd 服务
+这样以后就可以通过 systemctl 管理 MySQL。
+创建服务文件：
+vi /etc/systemd/system/mysql.service
+写入：
+[Unit]
+Description=MySQL 8.0 Database Server
+After=network.target
+
+[Service]
+Type=simple
+
+User=mysql
+Group=mysql
+
+ExecStart=/usr/local/bigdata/mysql/bin/mysqld --defaults-file=/etc/my.cnf
+
+Restart=on-failure
+RestartSec=5
+
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+
+加载服务：systemctl daemon-reload
+启动 MySQL：systemctl start mysql
+设置开机启动：systemctl enable mysql
+查看状态：systemctl status mysql
+
+验证 1
+ MySQL 服务启动成功后，应该显示：
+Active: active (running)
+查看端口：
+ss -lntp | grep 3306
+正常情况下：
+127.0.0.1:3306
+
+3.9 修改 MySQL root 密码：
+WinLinuxTool 不支持交互输入密码，可以使用 -p密码 直接传入：
+/usr/local/bigdata/mysql/bin/mysql -uroot -p'NIY_#k;ro85o' --connect-expired-password -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '123456';"
+验证新密码：/usr/local/bigdata/mysql/bin/mysql -uroot -p'123456' -e "SELECT VERSION();" 
+安全提醒： 命令行密码可能出现在 Shell 历史记录和进程参数中。
+学习环境可以临时这样使用，生产环境建议改用权限为 600 的 MySQL 客户端配置文件（--defaults-extra-file），避免明文密码暴露。
+修改 root 远程登录权限：
+/usr/local/bigdata/mysql/bin/mysql -uroot -p'123456' -e "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '123456'; ALTER USER 'root'@'%' IDENTIFIED BY '123456'; GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;"
+这样：
+- root@localhost：本机登录。
+- root@%：允许远程主机登录，包括 Windows Navicat。
+放行防火墙 3306 端口：
+firewall-cmd --permanent --add-port=3306/tcp
+firewall-cmd --reload、
+
+【之前的方法不适合我的工具】
+使用刚才的临时密码登录：/usr/local/bigdata/mysql/bin/mysql -uroot -p --connect-expired-password
+输入临时密码。
+执行：
+ALTER USER 'root'@'localhost'
+IDENTIFIED BY '123456';
+退出：
+exit;
+重新登录验证：
+/usr/local/bigdata/mysql/bin/mysql -uroot -p
+
+
+3.10 创建 Hive 元数据库
+Hive 使用独立的数据库保存元数据。
+我们创建：
+- 数据库：metastore
+- 用户：hive
+- 密码：123456
+
+/usr/local/bigdata/mysql/bin/mysql -uroot -p'123456' -e "
+-- 创建 Hive 元数据库
+CREATE DATABASE IF NOT EXISTS metastore
+DEFAULT CHARACTER SET utf8mb4
+COLLATE utf8mb4_0900_ai_ci;
+
+-- 创建 Hive 专用用户，允许本机和远程连接
+CREATE USER IF NOT EXISTS 'hive'@'localhost' IDENTIFIED BY '123456';
+CREATE USER IF NOT EXISTS 'hive'@'127.0.0.1' IDENTIFIED BY '123456';
+CREATE USER IF NOT EXISTS 'hive'@'%' IDENTIFIED BY '123456';
+
+-- 授予 Hive 元数据库权限
+GRANT ALL PRIVILEGES ON metastore.* TO 'hive'@'localhost';
+GRANT ALL PRIVILEGES ON metastore.* TO 'hive'@'127.0.0.1';
+GRANT ALL PRIVILEGES ON metastore.* TO 'hive'@'%';
+
+FLUSH PRIVILEGES;
+"

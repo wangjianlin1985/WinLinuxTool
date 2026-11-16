@@ -1,0 +1,12 @@
+导入hotel_admin和hotel_demo两个项目到idea
+
+修改rabbitmq容器ip为宿主机ip,其中admin需要修改一处，demo修改3处
+
+注意首次还需要运行hotel-demo\src\test\java\cn\itcast\hotel\HotelDocumentTest.java
+这个测试类里的testBulkRequest方法先给全部酒店信息添加到索引库
+
+管理员添加更新了酒店信息后可以通过DSL语句查询酒店信息： GET /hotel/_doc/36934
+
+前台页面：http://localhost:8089/index.html
+
+管理页面：http://localhost:8099/index.html

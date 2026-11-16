@@ -1,0 +1,9 @@
+mkdir -p /etc/systemd/system/docker.service.d
+
+cat > /etc/systemd/system/docker.service.d/legacy-image.conf <<'EOF'
+[Service]
+Environment=DOCKER_ENABLE_DEPRECATED_PULL_SCHEMA_1_IMAGE=1
+EOF
+
+systemctl daemon-reload
+systemctl restart docker

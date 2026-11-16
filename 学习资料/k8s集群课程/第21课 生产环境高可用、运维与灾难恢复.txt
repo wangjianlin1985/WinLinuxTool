@@ -1,0 +1,330 @@
+前面第1～20课，我们已经从 Kubernetes 基础资源学习到了 Deployment、Service、
+存储、网络、安全、监控、Helm、Argo CD、Jenkins，以及微服务项目自动化部署。
+但是，真正把 Kubernetes 用到生产环境，还有一个核心问题：
+如果服务器宕机、节点损坏、Pod 全部崩溃、数据库数据丢失，甚至整个 Kubernetes 集群无法启动，该怎么办？
+这就是第21课要解决的问题。
+
+本课主要学习四个方向：
+1. 高可用：一台服务器或者一个节点故障，业务仍然能够运行。
+2. 日常运维：如何检查集群、排查故障、维护节点。
+3. 数据备份：如何备份 Kubernetes 配置和业务数据。
+4. 灾难恢复：集群损坏后，如何恢复控制平面和业务。
+
+一、什么是 Kubernetes 生产环境高可用？
+1. 单 Master 架构的局限
+你现在的实验集群是：
+- k8s-master：192.168.79.130
+- k8s-node1
+- k8s-node2
+目前属于单 Master 架构。这种架构存在一个问题：
+如果 Master 服务器损坏，Worker 节点上的部分容器可能仍然运行，但是 Kubernetes 控制平面无法正常管理集群。
+
+例如：
+- 无法正常创建新的 Pod。
+- 无法正常执行 Deployment 更新。
+- 无法正常调度 Pod。
+- 无法正常管理集群资源。
+- 无法通过 API Server 正常管理集群。
+这就是单 Master 的单点故障问题。
+
+2. 多 Master 高可用架构
+生产环境通常采用：
+- 3 台 Master。
+- 多台 Worker。
+- 负载均衡器。
+- 高可用 API Server。
+- etcd 多节点集群。
+例如：
+节点	IP	角色
+k8s-master1	192.168.79.130	Master
+k8s-master2	192.168.79.131	Master
+k8s-master3	192.168.79.132	Master
+k8s-node1	192.168.79.133	Worker
+k8s-node2	192.168.79.134	Worker
+再增加一个负载均衡入口：192.168.79.100:6443
+这个地址可以由 HAProxy + Keepalived 提供。
+客户端不再直接连接某一台 Master，而是统一连接：192.168.79.100:6443
+这样即使一台 Master 故障，负载均衡器也可以将 API 请求转发给其他健康的 Master。
+注意： 三个 Master 的 etcd 通常组成 3 节点成员集群。etcd 需要多数派才能工作，因此 3 个成员允许同时失去 1 个成员，不能失去 2 个成员。
+
+3. 认识高可用的几个核心组件
+组件			作用
+HAProxy			API Server 请求负载均衡
+Keepalived		提供 VIP 虚拟 IP，主备切换
+etcd			保存 Kubernetes 集群状态
+kube-apiserver		Kubernetes API 接口
+kube-scheduler		Pod 调度
+kube-controller-manager	控制器管理
+记住：高可用不是简单地增加几台服务器，而是消除关键组件的单点故障。
+
+二、节点故障与 Pod 自动恢复
+这一部分我们直接使用你现有的三节点集群进行实验。
+1. 查看节点状态
+kubectl get nodes -o wide
+查看 Pod 分布：kubectl get pods -A -o wide
+
+2. 模拟 Worker 节点故障
+假设我们模拟 node2 故障。
+在 node2 上执行：systemctl stop kubelet
+然后在 Master 上观察：kubectl get nodes
+稍等一段时间，可能看到：
+NAME         STATUS
+k8s-master   Ready
+k8s-node1    Ready
+k8s-node2    NotReady
+这是因为 Master 暂时无法正常获取 node2 的节点心跳。
+
+3. 恢复节点
+在 node2 上执行：systemctl start kubelet
+再查看：kubectl get nodes
+节点恢复后，应该重新变为：Ready
+
+4. 测试 Deployment 自动恢复
+创建一个 3 副本的 Deployment：
+kubectl create deployment nginx-ha \
+  --image=nginx:1.27 \
+  --replicas=3
+查看：kubectl get pods -o wide
+删除其中一个 Pod：kubectl delete pod <Pod名称>
+再次查看：kubectl get pods -o wide
+你会发现 Kubernetes 自动创建新的 Pod。
+这是 Deployment 背后的 ReplicaSet 在发挥作用。
+
+注意： 删除 Pod 和关闭整个节点不是同一种故障。
+Deployment 可以保证期望副本数，但节点故障后的 Pod 驱逐、重新调度还受节点故障检测、容忍时间、存储和调度条件影响。
+
+三、Kubernetes 日常运维
+生产环境中，运维人员每天都需要检查集群健康状况。
+这一部分要熟练掌握常用检查命令。
+1. 集群整体检查
+kubectl cluster-info
+查看节点：kubectl get nodes -o wide
+查看所有命名空间：kubectl get ns
+查看所有命名空间的 Pod：kubectl get pods -A
+查看所有节点资源使用情况：kubectl top nodes
+查看 Pod 资源使用情况：kubectl top pods -A
+这里的 top 命令需要 Metrics Server 正常运行。
+
+2. 检查系统组件
+kubectl get pods -n kube-system -o wide
+重点关注：
+- coredns
+- calico
+- kube-proxy（如果集群使用该组件）
+- metrics-server（如果已安装）
+查看组件日志：kubectl logs -n kube-system <Pod名称>
+查看详细事件：kubectl get events -A --sort-by=.metadata.creationTimestamp
+
+3. 节点故障排查
+例如 node1 无法正常运行 Pod。
+首先检查：kubectl describe node k8s-node1
+然后登录 node1：systemctl status kubelet
+查看 kubelet 日志：journalctl -u kubelet -f
+
+查看 containerd：systemctl status containerd
+查看容器运行状态：crictl ps -a
+查看镜像：crictl images
+你之前已经使用过 crictl，这一部分可以直接结合现有环境练习。
+
+四、Kubernetes 数据备份与恢复
+这是本课最重要的内容之一。Kubernetes 集群中的数据主要分为两类：
+1. Kubernetes 集群自身的数据，例如 Deployment、Service、ConfigMap、Secret 等。
+2. 业务数据，例如 MySQL 数据库、Redis 数据、上传文件等。
+两者的备份方式不一样。
+
+1. 备份 Kubernetes YAML 配置
+假设我们有一个业务命名空间：kubectl create namespace test
+导出 Deployment：kubectl get deployment -n test -o yaml > deployment-backup.yaml
+导出 Service：kubectl get service -n test -o yaml > service-backup.yaml
+导出 ConfigMap：kubectl get configmap -n test -o yaml > configmap-backup.yaml
+导出 Secret：kubectl get secret -n test -o yaml > secret-backup.yaml
+这里需要注意：Secret 导出的 YAML 中可能包含经过 Base64 编码的敏感数据，不能把它当作加密文件，备份文件必须做好权限控制。
+
+2. 批量备份业务资源
+可以使用下面的脚本：mkdir -p /backup/k8s
+cat > /root/backup-k8s.sh <<'EOF'
+#!/bin/bash
+
+BACKUP_DIR="/backup/k8s/$(date +%F_%H-%M-%S)"
+
+mkdir -p "$BACKUP_DIR"
+
+kubectl get deployment,service,configmap,secret,ingress \
+  -A -o yaml > "$BACKUP_DIR/resources.yaml"
+
+kubectl get pvc,pv -A -o yaml \
+  > "$BACKUP_DIR/storage.yaml"
+
+echo "Kubernetes backup completed: $BACKUP_DIR"
+EOF
+
+赋予执行权限：chmod +x /root/backup-k8s.sh
+执行：/root/backup-k8s.sh
+注意：这只是资源清单备份，不是完整集群备份。它不会备份 PV 中的实际业务文件，也不会完整保存所有集群状态。
+
+3. 备份 etcd
+etcd 是 Kubernetes 控制平面的核心数据库。
+它保存了大量 Kubernetes 集群状态，例如：
+- Pod 信息。
+- Deployment 信息。
+- Service 信息。
+- ConfigMap 信息。
+- Secret 信息。
+- 节点注册信息。
+如果 etcd 数据丢失，集群控制平面可能无法正常工作。
+
+先确认 etcd 使用的证书路径：ls /etc/kubernetes/pki/etcd/
+对于 kubeadm 默认的本地 etcd，可以使用 etcdctl 进行快照备份。
+例如：export ETCDCTL_API=3
+执行：
+etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  snapshot save /backup/etcd-snapshot.db
+查看快照状态：etcdctl snapshot status /backup/etcd-snapshot.db -w table
+生产环境要求：
+- 定期备份 etcd。
+- 备份文件保存到独立磁盘或远程存储。
+- 保护证书和私钥。
+- 定期验证快照能否恢复。
+- 不要只把备份保存在 Master 本机。
+
+4. MySQL 数据备份
+如果 Kubernetes 中运行 MySQL，仅备份 YAML 是不够的。
+例如使用 MySQL 逻辑备份：
+mysqldump -uroot -p \
+  --all-databases \
+  > mysql-backup.sql
+恢复：mysql -uroot -p < mysql-backup.sql
+实际生产环境还需要考虑：
+- 数据库一致性。
+- 定期全量备份。
+- 增量备份或 Binlog。
+- 异地备份。
+- 数据恢复测试。
+
+五、Kubernetes 灾难恢复
+灾难恢复（Disaster Recovery，简称 DR）就是当系统遭遇严重故障时，能够尽可能恢复业务。
+1. 常见灾难场景
+故障场景		恢复方向
+Pod 崩溃		Deployment 自动重建
+Worker 宕机	节点恢复或 Pod 迁移
+Master 宕机	高可用控制平面切换
+etcd 数据损坏	从 etcd 快照恢复
+PVC 数据丢失	从业务数据备份恢复
+整个集群损坏	重建集群并恢复资源和数据
+
+2. etcd 快照恢复的基本思路
+假设 etcd 已经损坏，我们有一个之前保存的快照：
+/backup/etcd-snapshot.db
+恢复过程大致是：
+1. 停止 kube-apiserver 和相关控制平面服务。
+2. 停止 etcd。
+3. 使用快照创建新的 etcd 数据目录。
+4. 配置 etcd 使用恢复后的数据目录。
+5. 启动 etcd。
+6. 启动 Kubernetes 控制平面。
+7. 检查节点和业务资源。
+恢复快照的示意命令：
+ETCDCTL_API=3 etcdutl snapshot restore \
+  /backup/etcd-snapshot.db \
+  --data-dir=/var/lib/etcd-restored
+这里使用的是 etcdutl，而不是旧版 etcdctl 的恢复命令。
+特别提醒： 这只是恢复流程示意，不能直接在你当前正在运行的集群上执行。实际操作需要根据 etcd 版本、
+静态 Pod 配置、成员信息及数据目录规划制定完整步骤。多成员 etcd 集群还需要正确处理成员身份和重新加入流程。
+
+3. 灾难恢复的核心指标：RPO 和 RTO
+这是生产环境运维必须掌握的两个概念。
+指标	含义			示例
+RPO	最大可接受数据丢失时间	允许丢失最近5分钟的数据
+RTO	最大可接受业务恢复时间	故障后30分钟恢复业务
+
+例如：
+假设某电商系统：
+- 每5分钟备份一次数据库。
+- 业务要求最多丢失5分钟数据。
+- 业务要求30分钟内恢复。
+那么目标就是：
+RPO = 5分钟
+RTO = 30分钟
+备份频率和恢复能力必须满足业务要求，不能只看有没有备份文件。
+
+六、节点维护与升级
+生产环境中还经常需要维护节点，例如升级内核、升级 containerd、修复磁盘。
+Kubernetes 提供了节点维护命令。
+1. 驱逐节点上的 Pod
+假设要维护 node1：kubectl cordon k8s-node1
+作用：禁止新的 Pod 调度到 node1。
+然后：
+kubectl drain k8s-node1 \
+  --ignore-daemonsets
+作用：驱逐节点上的可驱逐 Pod。
+注意：如果节点有使用本地存储的 Pod、裸 Pod 或受 PDB 限制的 Pod，drain 可能需要额外处理。
+不要随意添加 --delete-emptydir-data 或强制驱逐参数。
+
+2. 维护完成后恢复调度
+kubectl uncordon k8s-node1
+查看：kubectl get nodes
+节点应该重新允许调度。
+
+3. 节点升级的生产原则
+生产环境通常遵循：
+1. 一次维护一个节点。
+2. 先检查剩余节点资源是否足够。
+3. 检查 PodDisruptionBudget。
+4. 备份关键数据。
+5. 执行 drain。
+6. 升级或维护。
+7. 恢复节点。
+8. 验证业务。
+9. 再处理下一台节点。
+
+七、本课综合实战任务
+接下来结合你的 Rocky Linux 9.8 三节点 Kubernetes 集群进行练习。
+第21课实战清单
+建议按照以下顺序完成。
+序号	实战任务		目标
+1	集群健康检查	熟练检查节点和系统 Pod
+2	创建 nginx-ha	创建3副本 Deployment
+3	删除一个 Pod	验证自动恢复
+4	模拟 Worker 故障	理解 NotReady 状态
+5	cordon / drain	掌握节点维护
+6	YAML 备份	备份业务资源
+7	etcd 快照		掌握集群数据库备份
+8	MySQL 备份	理解业务数据保护
+9	恢复演练		验证备份可用性
+10	RPO / RTO 规划	制定业务恢复目标
+
+实战验收标准
+完成本课后，你应该能够：
+- 独立检查 Kubernetes 集群健康状态。
+- 识别 Master 和 Worker 故障。
+- 理解 Kubernetes 高可用架构。
+- 使用 cordon、drain、uncordon 维护节点。
+- 备份 Kubernetes 资源 YAML。
+- 备份 etcd 快照。
+- 理解数据库备份与恢复。
+- 了解灾难恢复流程。
+- 制定基本的 RPO 和 RTO 指标。
+
+八、生产环境 Kubernetes 高可用架构总结
+把这一课的知识串起来，可以得到一套比较完整的生产环境架构：
+技术		解决的问题
+Kubernetes HA	控制平面高可用
+HAProxy		API Server 负载均衡
+Keepalived	VIP 主备切换
+etcd		集群数据存储与恢复
+Prometheus	指标监控
+Grafana		监控可视化
+Loki		日志管理
+Velero		Kubernetes 资源及持久化卷备份
+NFS / Ceph	共享或分布式存储
+MySQL Backup	数据库备份
+Jenkins / Argo CD	自动化发布
+
+这里的 Velero 可以作为后续拓展学习内容，它能够帮助我们备份和恢复 Kubernetes 资源及受支持的持久化卷数据。
+
+本课最重要的理解：
+生产环境不是要求服务器永远不出故障，而是要求发生故障时，系统能够发现问题、隔离故障、恢复服务，并尽可能减少数据损失

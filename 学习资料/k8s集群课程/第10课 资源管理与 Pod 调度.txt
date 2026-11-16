@@ -1,0 +1,811 @@
+ 学习 Kubernetes 如何合理分配服务器资源，以及如何决定 Pod 应该运行在哪台 Node 节点上。
+本课主要学习：
+1. CPU 和内存资源限制（requests / limits）
+2. Pod 资源调度原理
+3. 节点标签（Label）
+4. 节点选择器（nodeSelector）
+5. 节点亲和性（Node Affinity）
+6. Pod 亲和性与反亲和性
+7. 污点（Taints）与容忍（Tolerations）
+8. 资源不足时 Pod 为什么无法调度
+
+一、为什么需要资源管理？
+假设你的 Kubernetes 集群中有两台 Worker：
+- node1：4 核 CPU、4GB 内存
+- node2：4 核 CPU、4GB 内存
+现在有三个业务 Pod：
+Pod	CPU需求	内存需求
+nginx	0.5 核	256Mi
+Java	2 核	2Gi
+Redis	1 核	1Gi
+
+如果 Kubernetes 不管理资源，就可能出现：
+- 某个 Pod 占用大量 CPU。
+- 某个 Pod 占用大量内存。
+- 多个 Pod 抢占同一节点资源。
+- 节点内存耗尽，导致 Pod 被 OOMKilled。
+- 节点资源不足，新的 Pod 无法调度。
+因此 Kubernetes 需要通过资源管理机制控制 Pod 的资源使用。
+
+这里有两个非常重要的概念：
+requests：资源请求量
+表示 Pod 正常运行所需要的资源，也是 Kubernetes Scheduler 调度时的重要依据。
+limits：资源上限
+表示容器最多允许使用多少 CPU 和内存。
+
+1.1 CPU 和内存的单位
+资源	单位	示例
+CPU	核、m	1、500m、1000m
+内存	Mi、Gi	128Mi、512Mi、1Gi
+
+CPU 换算：
+1000m = 1 CPU核
+500m  = 0.5 CPU核
+250m  = 0.25 CPU核
+100m  = 0.1 CPU核
+
+内存换算：
+1024Mi = 1Gi
+512Mi  = 0.5Gi
+256Mi  = 0.25Gi
+
+注意：CPU 可以按时间片进行限制，内存不能像 CPU 一样灵活分配。容器超过内存限制时，可能被系统 OOM Killer 终止。
+
+二、requests 和 limits 实战
+我们先创建一个 nginx Deployment，给它设置 CPU 和内存资源。
+2.1 创建 YAML 文件
+在 Master 节点执行：
+cat > /root/nginx-resource.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-resource
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-resource
+  template:
+    metadata:
+      labels:
+        app: nginx-resource
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+        ports:
+        - containerPort: 80
+EOF
+
+2.2 应用配置
+kubectl apply -f /root/nginx-resource.yaml
+查看 Pod：kubectl get pods -o wide
+查看 Deployment：kubectl get deployment nginx-resource
+
+2.3 查看资源配置
+kubectl describe pod Pod名称
+你会看到类似：
+Limits:
+  cpu:     500m
+  memory:  256Mi
+
+Requests:
+  cpu:     200m
+  memory:  128Mi
+
+这意味着：
+- nginx 至少请求 200m CPU、128Mi 内存。
+- nginx 最多使用 500m CPU、256Mi 内存。
+这里有一个容易混淆的地方：
+requests 并不代表容器始终占用这么多资源，而是调度器为它计算资源需求时使用的值。
+
+例如两个 Pod：
+Pod	CPU requests	CPU limits
+Pod A	200m		500m
+Pod B	500m		1000m
+调度器会按照 200m + 500m = 700m 计算这两个 Pod 的 CPU 请求量，而不是按照 1500m 计算。
+
+2.4 查看节点资源
+kubectl describe node k8s-node1
+重点观察：
+Capacity:
+Allocatable:
+Allocated resources:
+
+含义：
+- Capacity：节点总资源。
+- Allocatable：节点可分配给 Pod 的资源。
+- Allocated resources：当前已经分配给 Pod 的资源请求量。
+注意，Allocated resources 统计的是调度资源请求，不是实时 CPU 使用率。
+
+三、CPU 限制和内存限制有什么区别？
+这是面试和实际运维都很重要的知识点。
+对比		CPU			Memory
+requests		调度依据			调度依据
+limits		限制 CPU 使用速率		限制内存使用上限
+超过 limits	CPU 被限制（Throttle）	可能 OOMKilled
+能否临时超过 limits	不能			不能
+
+举个例子：
+假设一个 Java 容器配置：
+resources:
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+  limits:
+    cpu: "1000m"
+    memory: "1Gi"
+
+如果 Java 突然需要 1.5 核 CPU：
+Kubernetes 会限制它最多使用 1 核。
+如果 Java 突然需要 1.5Gi 内存：
+容器可能因为超过 1Gi 限制而被 OOMKilled。
+
+查看是否发生过 OOM：kubectl describe pod Pod名称
+关注：
+Last State:
+  Terminated:
+    Reason: OOMKilled
+
+四、节点标签 Label
+前面我们学习了 Kubernetes 自动调度。
+例如创建一个 Deployment：
+spec:
+  replicas: 3
+如果没有额外约束，Kubernetes Scheduler 会根据节点资源和调度规则，决定 Pod 应该运行在哪台 Node 上。
+
+但是实际生产环境中，我们经常有这样的需求：
+- 数据库只能运行在指定服务器。
+- GPU 应用只能运行在 GPU 节点。
+- 某些业务只能运行在高性能服务器。
+- 测试环境和生产环境需要分开。
+这时候就需要 Label（标签）。
+
+4.1 查看节点标签
+kubectl get nodes --show-labels
+查看单个节点：kubectl describe node k8s-node1
+
+4.2 给节点添加标签
+例如给 node1 添加一个标签：kubectl label nodes k8s-node1 disk=ssd
+给 node2 添加：kubectl label nodes k8s-node2 disk=hdd
+查看标签：kubectl get nodes --show-labels
+也可以使用：kubectl get nodes -L disk
+
+结果大致如下：
+NAME         STATUS   DISK
+k8s-master   Ready    <none>
+k8s-node1    Ready    ssd
+k8s-node2    Ready    hdd
+
+删除标签：kubectl label nodes k8s-node1 disk-
+修改标签：kubectl label nodes k8s-node1 disk=nvme --overwrite
+注意：Label 本质上就是给 Kubernetes 对象添加键值对，除了 Node，Pod、Deployment 等资源也可以使用标签。
+
+五、nodeSelector 节点选择器
+现在我们已经给 node1 添加了：disk=ssd
+假设我们希望 nginx 只能运行在 SSD 节点。
+这时候就可以使用 nodeSelector。
+
+5.1 创建 Deployment
+cat > /root/nginx-selector.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-selector
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-selector
+  template:
+    metadata:
+      labels:
+        app: nginx-selector
+    spec:
+      nodeSelector:
+        disk: ssd
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+EOF
+
+应用：kubectl apply -f /root/nginx-selector.yaml
+查看：kubectl get pods -o wide
+你会发现两个 nginx Pod 都会调度到：k8s-node1
+因为只有 node1 满足：disk=ssd
+
+5.2 如果没有符合条件的节点怎么办？
+例如：
+nodeSelector:
+  disk: nvme
+但是所有节点都没有 disk=nvme 标签。
+那么 Pod 会出现：STATUS: Pending
+查看原因：kubectl describe pod Pod名称
+Events 中可能出现：
+0/3 nodes are available:
+3 node(s) didn't match Pod's node affinity/selector.
+这说明没有符合调度条件的节点。
+
+注意：nodeSelector 是硬性条件，必须匹配，否则 Pod 无法调度。
+
+六、Node Affinity 节点亲和性
+刚才的 nodeSelector 虽然简单，但是有一个问题：
+它只能进行简单的标签匹配，不能表达复杂的调度条件。
+例如：
+- 必须运行在 SSD 节点。
+- 优先运行在 SSD 节点，没有 SSD 时可以运行在其他节点。
+- 节点标签必须满足多个条件。
+
+这时候就需要使用 Node Affinity（节点亲和性）。
+它比 nodeSelector 更灵活。
+Node Affinity 分为两种：
+类型						含义		调度要求
+requiredDuringSchedulingIgnoredDuringExecution	必须满足条件	硬性要求
+preferredDuringSchedulingIgnoredDuringExecution	尽量满足条件	软性要求
+注意名称虽然很长，但是记住：
+- required：必须满足。
+- preferred：尽量满足。
+- IgnoredDuringExecution：Pod 运行后，即使节点标签发生变化，也不会因为不再匹配而自动驱逐 Pod。
+
+6.1 required：必须运行在 SSD 节点
+创建 YAML：
+cat > /root/nginx-affinity.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-affinity
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-affinity
+  template:
+    metadata:
+      labels:
+        app: nginx-affinity
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: disk
+                operator: In
+                values:
+                - ssd
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+EOF
+
+应用：kubectl apply -f /root/nginx-affinity.yaml
+查看：kubectl get pods -o wide
+效果与前面的 nodeSelector 类似，两个 Pod 都必须运行在 disk=ssd 的节点上。
+
+6.2 preferred：优先运行在 SSD 节点
+现在假设我们希望：
+- 优先使用 SSD 节点。
+- 如果 SSD 节点资源不足，可以使用其他节点。
+修改 YAML：
+cat > /root/nginx-preferred.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-preferred
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-preferred
+  template:
+    metadata:
+      labels:
+        app: nginx-preferred
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: disk
+                operator: In
+                values:
+                - ssd
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+EOF
+
+应用：kubectl apply -f /root/nginx-preferred.yaml
+
+这里有两个关键参数：
+- weight: 100：权重，范围 1～100，权重越大，偏好越强。
+- preferredDuringSchedulingIgnoredDuringExecution：尽量满足条件。
+注意：preferred 只是优先级，不保证一定调度到 SSD 节点。最终还要结合资源、其他调度约束等条件综合判断。
+
+6.3 Label 匹配运算符
+Node Affinity 支持多种运算符：
+operator	含义
+In	标签值在指定列表中
+NotIn	标签值不在指定列表中
+Exists	标签键存在
+DoesNotExist	标签键不存在
+Gt	标签值大于指定值
+Lt	标签值小于指定值
+
+例如：
+matchExpressions:
+- key: disk
+  operator: In
+  values:
+  - ssd
+  - nvme
+
+意思是：节点的 disk 标签必须是 ssd 或 nvme。
+
+七、Pod Affinity 和 Pod Anti-Affinity
+前面学习的 Node Affinity 是根据节点标签决定 Pod 运行位置。
+那么，如果我们希望根据其他 Pod 的位置决定调度位置呢？
+例如：
+- Java 应用希望和 Redis 运行在同一节点。
+- 两个重要业务希望分开运行。
+- 同一个应用的多个副本尽量分布在不同节点。
+这就需要：
+- Pod Affinity：Pod 亲和性。
+- Pod Anti-Affinity：Pod 反亲和性。
+
+7.1 Pod Affinity：让两个 Pod 尽量在一起
+假设 Redis 已经运行在某个节点：
+labels:
+  app: redis
+我们创建一个 Java 应用，让它必须与 Redis 运行在同一个节点。
+cat > /root/java-affinity.yaml <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: java-affinity
+  labels:
+    app: java
+spec:
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app: redis
+        topologyKey: kubernetes.io/hostname
+  containers:
+  - name: nginx
+    image: nginx:1.27
+EOF
+
+应用：kubectl apply -f /root/java-affinity.yaml
+这里为了方便实验，暂时使用 nginx 镜像模拟 Java Pod。
+重点看：
+podAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+
+表示必须满足 Pod 亲和性条件。
+labelSelector:
+  matchLabels:
+    app: redis
+表示寻找标签为 app=redis 的 Pod。
+
+topologyKey: kubernetes.io/hostname
+表示以节点主机名作为拓扑范围。
+简单理解：
+找到运行 Redis Pod 的节点，再把 java-affinity 调度到同一个节点。
+
+注意：如果集群中不存在符合条件的 Redis Pod，或者对应节点不可调度，那么 Java Pod 就会一直 Pending。
+
+7.2 Pod Anti-Affinity：让两个 Pod 分开
+现在我们反过来：希望 nginx 的多个副本不要全部运行在同一台机器上。创建：
+cat > /root/nginx-anti-affinity.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-anti-affinity
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-anti-affinity
+  template:
+    metadata:
+      labels:
+        app: nginx-anti-affinity
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: nginx-anti-affinity
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: nginx
+        image: nginx:1.27
+EOF
+
+应用：kubectl apply -f /root/nginx-anti-affinity.yaml
+查看：kubectl get pods -o wide
+
+因为你的集群有两台 Worker，所以两个 Pod 正常情况下会分别运行在 node1 和 node2。
+这里有一个重要知识点：如果使用 required，而集群只有一台符合条件的 Worker，那么第二个 Pod 就无法调度。
+如果使用 preferred，则只是尽量分开，资源不足时仍允许它们运行在同一节点。
+
+八、Taints 和 Tolerations：污点与容忍
+这是 Kubernetes 调度中非常重要的一部分。
+前面我们学习：
+- Label：给节点打标签。
+- NodeSelector：选择有指定标签的节点。
+- Node Affinity：根据标签进行复杂匹配。
+但是还有一种情况：
+
+某些节点不希望普通 Pod 随便运行上去。
+例如：
+- Master 节点专门负责控制平面。
+- GPU 节点专门提供 GPU 计算能力。
+- 某台服务器专门运行数据库。
+- 某些节点处于维护状态。
+这时候就需要 Taints（污点）。
+
+8.1 什么是 Taint？
+可以理解为：给节点贴上一个特殊标记，普通 Pod 不允许随便进入。
+Taint 由三个部分组成：key=value:effect  例如：type=database:NoSchedule
+含义：
+- key：type
+- value：database
+- effect：NoSchedule
+
+8.2 Taint 的三种效果
+effect		含义
+NoSchedule	不允许新的不容忍 Pod 调度到该节点
+PreferNoSchedule	尽量避免调度到该节点
+NoExecute	不允许新的不容忍 Pod 调度，已有的不容忍 Pod 也会被驱逐
+其中 NoSchedule 最常用。
+
+8.3 给 node2 添加污点
+执行：kubectl taint nodes k8s-node2 type=database:NoSchedule
+查看：kubectl describe node k8s-node2
+重点看：
+Taints:
+  type=database:NoSchedule
+
+现在我们创建一个普通 nginx Pod：kubectl run nginx-taint --image=nginx:1.27
+查看：kubectl get pods -o wide
+如果 node1 有足够资源，Pod 会调度到 node1，而不会调度到 node2。
+注意：污点并不会把已经运行在 node2 上的普通 Pod 驱逐出去，NoSchedule 只影响新的调度。
+
+8.4 Tolerations：让 Pod 容忍污点
+现在我们希望某个 Pod 可以运行在 node2 上。需要给它添加 Tolerations。
+cat > /root/nginx-toleration.yaml <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-toleration
+spec:
+  tolerations:
+  - key: "type"
+    operator: "Equal"
+    value: "database"
+    effect: "NoSchedule"
+  containers:
+  - name: nginx
+    image: nginx:1.27
+EOF
+
+应用：kubectl apply -f /root/nginx-toleration.yaml
+查看：kubectl get pods -o wide
+现在这个 Pod 可以调度到 node2 了。
+
+这里需要特别注意：
+Tolerations 只是允许 Pod 进入有污点的节点，并不代表一定会进入该节点。
+如果你希望它必须运行在 node2，还需要配合 Node Affinity 或 nodeSelector。
+
+例如：
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: k8s-node2
+  tolerations:
+  - key: "type"
+    operator: "Equal"
+    value: "database"
+    effect: "NoSchedule"
+
+这样就同时满足：
+1. 必须运行在 node2。
+2. 能够容忍 node2 的污点。
+8.5 删除污点
+实验结束后，删除 node2 的污点：
+kubectl taint nodes k8s-node2 type=database:NoSchedule-
+注意最后的 -，代表删除污点。
+
+8.6 为什么 Master 节点通常不运行普通 Pod？
+查看 Master 节点：kubectl describe node k8s-master
+你可能看到：
+Taints:
+  node-role.kubernetes.io/control-plane:NoSchedule
+这是 Kubernetes 控制平面节点的默认调度保护机制。
+因此普通 Pod 通常不会调度到 Master。
+生产环境中一般保留这个污点，让 Master 专注于控制平面工作。
+
+九、Kubernetes Pod 调度完整流程
+学完前面的知识，现在我们把整个调度过程串起来。
+假设你执行：kubectl apply -f nginx.yaml
+Kubernetes 会经历以下过程：
+1. 创建 Pod
+API Server 接收请求并保存 Pod 对象
+	↓
+2. Scheduler 调度器
+发现尚未分配节点的 Pod
+	↓
+3. 筛选符合条件的节点
+- CPU / 内存 requests 是否满足
+- nodeSelector 是否匹配
+- Node Affinity 是否匹配
+- Taints 是否能够容忍
+- Pod Affinity / Anti-Affinity 是否满足
+	↓
+4. 选择合适的 Node
+根据调度评分等因素选择节点
+	↓
+5. 绑定 Pod 到 Node
+Scheduler 完成节点绑定
+	↓
+6. Kubelet 启动容器
+通过 containerd 拉取镜像并创建容器
+
+这里需要记住一个核心区别：
+- Scheduler 负责决定 Pod 去哪个节点。
+- Kubelet 负责在自己的节点上管理 Pod。
+- containerd 负责实际运行容器。
+
+十、Pod 的 QoS 服务质量等级
+这是资源管理中另一个重要知识点。
+Kubernetes 会根据容器的 CPU、Memory requests 和 limits 配置，为 Pod 分配 QoS Class。
+一共有三种：
+QoS 类型		含义		特点
+Guaranteed	资源保障型	资源配置最严格
+Burstable		可突发型		requests 和 limits 不完全相同
+BestEffort		尽力而为型	没有配置 requests 和 limits
+
+10.1 Guaranteed
+如果 Pod 中所有容器都配置了 CPU 和内存的 requests、limits，并且：
+requests = limits
+那么 Pod 属于 Guaranteed。
+例如：
+resources:
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+10.2 Burstable
+只要不满足 Guaranteed 条件，但至少有一个容器设置了 requests 或 limits，通常就属于 Burstable。
+例如：
+resources:
+  requests:
+    cpu: "200m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+这就是前面 nginx 实验中的情况。
+
+10.3 BestEffort
+如果 Pod 中所有容器都没有配置 CPU 和内存的 requests、limits，那么属于 BestEffort。
+例如：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-besteffort
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+
+
+10.4 查看 QoS
+kubectl get pods
+查看详细信息：kubectl describe pod Pod名称
+找到：QoS Class: Burstable
+三种 QoS 在节点内存压力下的驱逐优先级通常是：
+BestEffort
+    ↓
+Burstable
+    ↓
+Guaranteed
+但要注意，实际驱逐还会考虑 Pod 的内存使用量与 requests 的关系、Priority 等因素，并不是单纯按照 QoS 等级决定。
+
+十一、Pod 调度失败如何排查？
+以后实际使用 Kubernetes，最常见的问题之一就是 Pod 一直处于：Pending
+这不一定是镜像问题，也不一定是容器启动问题。
+很可能是 Scheduler 找不到合适的节点。
+
+11.1 查看 Pod
+kubectl get pods -o wide
+
+11.2 查看详细信息
+kubectl describe pod Pod名称
+
+重点看最后的 Events。
+常见问题：
+Events 信息	可能原因
+Insufficient cpu	节点可分配 CPU 不足
+Insufficient memory	节点可分配内存不足
+didn't match Pod's node affinity/selector	节点标签不符合条件
+had untolerated taint	Pod 不容忍节点污点
+didn't match pod affinity rules	Pod 亲和性条件不满足
+node(s) were unschedulable	节点不可调度
+
+11.3 查看节点是否允许调度
+kubectl get nodes
+如果节点显示：Ready,SchedulingDisabled
+说明该节点被设置为不可调度。
+
+恢复调度：kubectl uncordon k8s-node1
+如果想主动禁止新 Pod 调度到某个节点：kubectl cordon k8s-node1
+
+注意：
+- cordon：禁止新的 Pod 调度到该节点。
+- uncordon：恢复节点调度。
+- drain：驱逐符合条件的现有 Pod，并将节点置于不可调度状态，通常用于维护节点。
+例如：
+kubectl drain k8s-node1 --ignore-daemonsets
+这里先不要在实验集群上随意执行 drain，尤其不要直接对 Master 执行。它可能影响现有业务 Pod，也涉及本地存储和 DaemonSet 等特殊情况。
+
+十二、本课综合实验
+前面学习了很多概念，现在我们做一个综合实验。
+目标：
+1. 给 node1 添加 SSD 标签。
+2. 给 node2 添加 HDD 标签。
+3. 创建一个 nginx Deployment。
+4. 设置 CPU 和内存资源。
+5. 让 nginx 优先运行在 SSD 节点。
+6. 查看 Pod 实际调度位置。
+
+12.1 设置节点标签
+kubectl label nodes k8s-node1 disk=ssd --overwrite
+kubectl label nodes k8s-node2 disk=hdd --overwrite
+查看：kubectl get nodes -L disk
+
+12.2 创建综合 YAML
+cat > /root/nginx-final.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-final
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx-final
+  template:
+    metadata:
+      labels:
+        app: nginx-final
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: disk
+                operator: In
+                values:
+                - ssd
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+        ports:
+        - containerPort: 80
+EOF
+
+
+12.3 应用配置
+kubectl apply -f /root/nginx-final.yaml
+
+12.4 查看调度结果
+kubectl get pods -o wide
+
+正常情况下，调度器会优先考虑 node1。
+但注意，因为这里只有一个 SSD 节点，所以三个副本不一定全部运行在 node1，实际结果还取决于节点资源和调度评分。
+
+12.5 查看资源配置
+kubectl describe deployment nginx-final
+
+查看节点资源：
+kubectl describe node k8s-node1
+kubectl describe node k8s-node2
+
+查看 Pod 的 QoS：
+kubectl describe pod Pod名称
+
+
+十三、本课知识点总结
+这一课的核心就是两个方面：资源管理和调度管理。
+知识点		作用			关键配置或命令
+requests		声明资源请求量		resources.requests
+limits		限制资源使用上限		resources.limits
+Label		给节点添加标签		kubectl label
+nodeSelector	根据标签选择节点		nodeSelector
+Node Affinity	灵活匹配节点		nodeAffinity
+Pod Affinity	Pod 尽量或必须在一起	podAffinity
+Pod Anti-Affinity	Pod 尽量或必须分开		podAntiAffinity
+Taints		给节点设置污点		kubectl taint
+Tolerations	允许 Pod 容忍污点		tolerations
+QoS		Pod 资源服务质量等级	Guaranteed / Burstable / BestEffort
+cordon		禁止新 Pod 调度		kubectl cordon
+uncordon		恢复节点调度		kubectl uncordon
+drain		驱逐节点上的适用 Pod	kubectl drain
+
+建议把下面这几个概念牢牢记住：
+调度相关概念对比
+nodeSelector
+选择节点
+根据节点 Label 进行简单匹配。
+
+Node Affinity
+节点亲和
+根据节点 Label 进行更灵活的硬性或软性匹配。
+
+Pod Affinity
+尽量或必须在一起
+根据其他 Pod 的位置决定调度位置。
+
+Pod Anti-Affinity
+尽量或必须分开
+让指定 Pod 分布在不同的拓扑域。
+
+Taints / Tolerations
+污点与容忍
+节点设置限制，Pod 声明是否能够容忍。
+
+
+十四、实验环境清理
+本课实验结束后，可以删除创建的测试资源。
+kubectl delete deployment nginx-resource nginx-selector nginx-affinity nginx-preferred nginx-anti-affinity nginx-final
+
+删除测试 Pod：
+kubectl delete pod java-affinity nginx-taint nginx-toleration nginx-besteffort --ignore-not-found
+
+删除节点标签：
+kubectl label nodes k8s-node1 disk-
+kubectl label nodes k8s-node2 disk-
+
+删除本课 YAML：
+rm -f /root/nginx-resource.yaml
+rm -f /root/nginx-selector.yaml
+rm -f /root/nginx-affinity.yaml
+rm -f /root/nginx-preferred.yaml
+rm -f /root/java-affinity.yaml
+rm -f /root/nginx-anti-affinity.yaml
+rm -f /root/nginx-toleration.yaml
+rm -f /root/nginx-final.yaml
+
+这些命令只清理本课创建的实验资源，不会删除 Kubernetes 系统组件。

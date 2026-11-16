@@ -1,0 +1,537 @@
+这一课开始进入 Kubernetes 实战中的一个重要阶段：自动化部署（DevOps）。
+
+前面我们已经学习了 Kubernetes 的核心资源、网络、存储、安全、监控、Helm 和 GitOps。
+现在要解决一个实际工作中的问题：开发人员修改了 Java 项目代码，
+如何让系统自动完成代码拉取、编译、打包、构建 Docker 镜像、推送镜像仓库，最后自动部署到 Kubernetes 集群？
+这就是 Jenkins CI/CD 流水线要解决的问题。
+
+一、先理解 CI/CD 是什么
+CI/CD 是现代软件开发和运维中非常重要的一套自动化流程。
+CI = Continuous Integration，持续集成。
+CD = Continuous Delivery / Continuous Deployment，持续交付 / 持续部署。
+
+1. CI：持续集成
+假设你正在开发一个 Java 项目。
+以前的部署方式：
+1. 开发人员修改 Java 代码。
+2. 手动将代码上传到服务器。
+3. 手动执行 Maven 编译。
+4. 手动制作 Docker 镜像。
+5. 手动上传镜像仓库。
+整个过程比较繁琐，而且容易出错。
+使用 CI 后：
+- 开发人员提交代码到 Git 仓库。
+- Jenkins 自动检测代码变化。
+- Jenkins 自动拉取代码。
+- Jenkins 自动执行 Maven 编译。
+- Jenkins 自动执行测试。
+- Jenkins 自动构建 Docker 镜像。
+这就是持续集成。
+
+2. CD：持续交付和持续部署
+CI 完成后，还需要将应用交付给 Kubernetes。
+例如：
+- Jenkins 将 Docker 镜像推送到镜像仓库。
+- Jenkins 更新 Kubernetes Deployment。
+- Kubernetes 拉取新的镜像。
+- Kubernetes 创建新 Pod。
+- 新版本逐步替换旧版本。
+这就是持续部署。
+
+3. CI/CD 完整流程：CI/CD 自动化流水线
+
+开发人员提交代码
+Git Push
+↓
+Git 仓库
+GitHub / GitLab
+↓
+Jenkins CI
+拉取代码	Maven 编译
+自动测试	构建镜像
+↓
+Docker 镜像仓库
+Harbor / Docker Hub
+↓
+Jenkins CD
+部署到 Kubernetes
+更新 Deployment 镜像版本
+↓
+Kubernetes 集群
+新版本 Pod Running
+滚动更新完成，应用上线
+
+这张图就是本课要实现的核心目标。
+
+二、Jenkins 是什么？
+Jenkins 是一个开源自动化服务器，主要用于 CI/CD。
+Jenkins 的主要功能：
+功能		作用
+Git 集成		自动拉取 Git 代码
+Maven 集成	编译 Java 项目
+Docker 集成	构建 Docker 镜像
+Pipeline		编写自动化流水线
+Kubernetes 集成	自动部署应用
+插件管理		扩展各种自动化功能
+Web 管理		浏览器管理任务和流水线
+
+Jenkins 最重要的概念是 Pipeline（流水线）。
+它允许我们使用代码定义整个构建和部署过程，而不是每次手动点击一系列操作。
+
+三、Jenkins 的核心概念
+先认识几个重要名词。
+名称		含义
+Job		Jenkins 中的一个任务
+Pipeline		自动化流水线
+Stage		流水线中的一个阶段
+Step		阶段中的具体操作
+Agent		执行任务的节点
+Jenkinsfile	流水线配置文件
+Credential	保存 Git、仓库等认证信息
+Plugin		Jenkins 插件
+
+例如一个 Jenkins Pipeline：
+pipeline {
+    agent any
+
+    stages {
+        stage('拉取代码') {
+            steps {
+                echo '开始拉取代码'
+            }
+        }
+
+        stage('编译项目') {
+            steps {
+                echo '开始 Maven 编译'
+            }
+        }
+
+        stage('构建镜像') {
+            steps {
+                echo '开始构建 Docker 镜像'
+            }
+        }
+
+        stage('部署 Kubernetes') {
+            steps {
+                echo '开始部署应用'
+            }
+        }
+    }
+}
+
+这段代码定义了四个阶段。
+Jenkins 会按照顺序执行这些阶段。
+
+四、Jenkins 与 Kubernetes 的集成架构
+Jenkins 可以安装在 Kubernetes 集群外部，也可以安装在 Kubernetes 集群内部。
+初学阶段建议先使用独立 Jenkins 服务器或独立虚拟机，方便理解 Jenkins 和 Kubernetes 之间的关系。
+
+我们的实验架构：
+组件		作用
+Jenkins		负责自动化流水线
+Git 仓库		保存项目源代码
+Maven		编译 Java 项目
+Docker 构建环境	制作应用镜像
+镜像仓库		保存 Docker 镜像
+Kubernetes	运行最终应用
+
+需要特别理解：
+Jenkins 不负责运行 Kubernetes 中的业务容器，它负责触发构建和部署操作，真正运行应用的是 Kubernetes。
+
+五、安装 Jenkins
+Jenkins 可以部署在以下几个位置：
+1. 独立 Rocky Linux 虚拟机。
+2. Kubernetes 集群内部。
+3. Docker 容器中。
+本课建议先使用独立 Rocky Linux 虚拟机部署 Jenkins。
+原因：
+- Jenkins 与 Kubernetes 分离，架构更清晰。
+- Jenkins 重启不会影响 Kubernetes 控制平面。
+- 方便理解 Jenkins 如何通过 kubeconfig 管理 Kubernetes。
+- 后面可以再学习 Jenkins 动态 Agent 和 Kubernetes 插件。
+
+1. 安装 Java
+Jenkins 需要 Java 运行环境。在 Jenkins 服务器上执行：
+dnf install -y fontconfig java-21-openjdk
+查看版本：java -version
+
+2. 配置 Jenkins 软件源
+wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/rpm-stable/jenkins.repo
+导入 GPG 密钥：rpm --import https://pkg.jenkins.io/rpm-stable/jenkins.io-2023.key
+安装：dnf install -y jenkins
+启动 Jenkins：systemctl enable --now jenkins
+查看状态：systemctl status jenkins
+默认 Web 端口：8080
+假设 Jenkins 虚拟机 IP 为 192.168.79.140，浏览器访问：
+http://192.168.79.140:8080
+
+3. 获取初始管理员密码
+cat /var/lib/jenkins/secrets/initialAdminPassword
+将输出的密码填写到 Jenkins 初始化页面。
+然后：
+1. 安装推荐插件。
+2. 创建管理员账号。
+3. 完成 Jenkins 初始化。
+注意：如果防火墙开启，需要放行 8080 端口；生产环境建议使用 HTTPS 反向代理，而不是直接暴露 Jenkins。
+
+六、Jenkins 常用插件
+Jenkins 的强大之处在于插件生态。
+本课重点认识以下插件：
+插件		用途
+Git Plugin		拉取 Git 代码
+Pipeline		创建流水线
+Pipeline Stage View	查看流水线执行阶段
+Maven Integration	Maven 项目集成
+Docker Pipeline	Docker 镜像构建
+Kubernetes CLI	Kubernetes 命令行操作
+Credentials Binding	使用认证凭据
+SSH Agent	SSH 密钥管理
+注意：插件名称和版本可能随 Jenkins 版本变化，安装时以插件管理页面为准。
+
+七、配置 Jenkins 与 Git 仓库
+假设我们有一个 Java 项目：
+springboot-demo/
+├── pom.xml
+├── Dockerfile
+├── Jenkinsfile
+└── src/
+    └── main/
+        └── java/
+
+代码保存在 GitHub 或 GitLab 中。
+例如：git clone https://github.com/test/springboot-demo.git
+Jenkins 通过 Git 插件拉取代码。如果仓库是私有的，需要在 Jenkins 的 Credentials 中添加访问凭据。
+
+这里需要理解一个重要概念：Credentials 就是 Jenkins 的凭据管理功能。
+不要把 Git 密码、仓库密码、Kubernetes 管理员密码直接写进 Jenkinsfile。
+
+八、配置 Maven 自动编译
+Maven 是 Java 项目的构建工具。假设项目根目录有一个 pom.xml。
+执行：mvn clean package -DskipTests
+执行完成后，会生成：
+target/
+└── springboot-demo.jar
+Jenkins 就可以自动执行这条命令。
+在实际项目中，应当运行测试，而不是长期跳过测试。
+例如：
+mvn clean test package
+如果测试失败，流水线应该停止，不能继续发布有问题的版本。
+
+九、Docker 镜像构建
+完成 Java 项目编译后，需要将 JAR 文件制作成 Docker 镜像。
+在项目根目录创建 Dockerfile：
+FROM eclipse-temurin:21-jre
+
+WORKDIR /app
+
+COPY target/springboot-demo.jar app.jar
+
+EXPOSE 8080
+
+ENTRYPOINT ["java","-jar","app.jar"]
+
+手动构建镜像：docker build -t springboot-demo:v1 .
+查看镜像：docker images
+运行容器测试：
+docker run -d \
+  --name springboot-demo \
+  -p 8080:8080 \
+  springboot-demo:v1
+
+这里有个容易混淆的地方：你目前 Kubernetes 使用的是 containerd，不代表 Jenkins 不能使用 Docker。
+Jenkins 可以在独立构建服务器上安装 Docker Engine，用它构建镜像，然后推送到镜像仓库。Kubernetes 节点通过 containerd 拉取同一个镜像即可。
+生产环境也可以使用 BuildKit、Buildah 或 Kaniko 等构建方式，不一定非要 Docker Daemon。
+
+十、推送镜像到镜像仓库
+这里以 Docker Hub 为例。
+假设仓库地址：docker.io
+登录：docker login
+给镜像打标签：
+docker tag springboot-demo:v1 \
+  test/springboot-demo:v1
+推送：docker push test/springboot-demo:v1
+查看远程仓库，就能看到上传的镜像。
+实际使用时，建议使用版本号或 Git Commit SHA 标记镜像，不要只使用 latest。
+
+例如：
+test/springboot-demo:1.0.0
+test/springboot-demo:1.0.1
+test/springboot-demo:1.0.2
+这样就能实现版本管理和回滚。
+
+十一、Jenkins 自动部署 Kubernetes
+这是本课最重要的部分。前面我们已经学习了 Deployment。
+例如创建一个 Kubernetes Deployment：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: springboot-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: springboot-demo
+  template:
+    metadata:
+      labels:
+        app: springboot-demo
+    spec:
+      containers:
+      - name: springboot-demo
+        image: test/springboot-demo:v1
+        ports:
+        - containerPort: 8080
+
+保存为：springboot-deploy.yaml
+手动部署：kubectl apply -f springboot-deploy.yaml
+查看：kubectl get pods -o wide
+
+现在我们希望 Jenkins 自动执行部署。
+1. 配置 Kubernetes 访问权限
+Jenkins 需要能够访问 Kubernetes API Server。
+在 Kubernetes 中创建一个专门的 ServiceAccount，并通过 RBAC 授予它指定 Namespace 内 Deployment、Pod 等资源的必要权限。
+不要直接把 /etc/kubernetes/admin.conf 交给 Jenkins 使用，因为它具有过高的集群管理权限。
+
+例如，先创建命名空间：kubectl create namespace dev
+后续实验可以为 Jenkins 创建专用 ServiceAccount、Role 和 RoleBinding，并提供对应的 kubeconfig。
+
+Jenkins 服务器还必须能够访问 Kubernetes API Server，例如：192.168.79.130:6443
+注意网络连通性和证书信任。
+
+2. Jenkins 执行 Kubernetes 部署命令
+例如：
+kubectl set image deployment/springboot-demo \
+  springboot-demo=test/springboot-demo:v2 \
+  -n dev
+
+等待滚动更新：kubectl rollout status deployment/springboot-demo -n dev
+查看更新后的 Pod：kubectl get pods -n dev
+查看 Deployment：kubectl get deployment -n dev
+这样 Jenkins 就能够自动更新 Kubernetes 应用。
+
+十二、编写完整 Jenkinsfile
+现在把前面所有操作整合起来。
+在 Java 项目根目录创建：Jenkinsfile
+示例：
+pipeline {
+    agent any
+
+    environment {
+        IMAGE = 'test/springboot-demo'
+        VERSION = '1.0.0'
+        NAMESPACE = 'dev'
+    }
+
+    stages {
+
+        stage('拉取代码') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Maven 编译') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('构建 Docker 镜像') {
+            steps {
+                sh '''
+                docker build \
+                  -t ${IMAGE}:${VERSION} .
+                '''
+            }
+        }
+
+        stage('推送镜像') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )
+                ]) {
+                    sh '''
+                    echo "$DOCKER_PASS" | docker login \
+                      -u "$DOCKER_USER" --password-stdin
+
+                    docker push ${IMAGE}:${VERSION}
+                    docker logout
+                    '''
+                }
+            }
+        }
+
+        stage('部署 Kubernetes') {
+            steps {
+                sh '''
+                kubectl set image deployment/springboot-demo \
+                  springboot-demo=${IMAGE}:${VERSION} \
+                  -n ${NAMESPACE}
+
+                kubectl rollout status \
+                  deployment/springboot-demo \
+                  -n ${NAMESPACE}
+                '''
+            }
+        }
+    }
+}
+
+
+这只是教学示例，正式使用前还需要：
+- 配置 Jenkins 的 Maven、Docker 和 kubectl 执行环境。
+- 添加 dockerhub 凭据。
+- 配置 Kubernetes 专用 kubeconfig。
+- 确保 Deployment 已存在于 dev 命名空间。
+- 确保镜像仓库和 Kubernetes 节点网络可达。
+- 每次构建使用唯一版本号，避免不同提交覆盖同一个镜像标签。
+运行后的效果Jenkins 会按照以下顺序执行：
+阶段	执行内容
+Stage 1	拉取 Git 代码
+Stage 2	Maven 编译和测试
+Stage 3	构建 Docker 镜像
+Stage 4	推送镜像仓库
+Stage 5	更新 Kubernetes Deployment
+当全部成功后，应用的新版本就上线了。
+
+十三、配置 Git Webhook 自动触发
+前面我们是通过 Jenkins 手动启动流水线。
+真正的 CI/CD 应该是：只要开发人员提交代码，Jenkins 就自动开始构建。
+
+例如 GitHub Webhook：
+1. 开发人员执行 git push。
+2. GitHub 检测到代码变化。
+3. GitHub 向 Jenkins 发送 Webhook 请求。
+4. Jenkins 自动启动 Pipeline。
+5. 自动完成编译、测试、镜像构建和部署。
+
+GitHub 仓库设置：
+Settings
+  └── Webhooks
+       └── Add webhook
+
+填写：
+Payload URL:
+http://192.168.79.140:8080/github-webhook/
+
+Content type:
+application/json
+
+然后在 Jenkins Pipeline Job 中启用 GitHub hook trigger。
+注意：Jenkins 必须能被 GitHub 访问。实际部署通常需要公网可达的 HTTPS 地址或安全的网络隧道，不能简单使用仅内网可访问的 IP。
+
+十四、Kubernetes 部署失败如何回滚？
+CI/CD 不仅要能自动发布，还要能处理发布失败。
+
+假设：
+v1：正常运行
+v2：发布成功
+v3：发布后程序出现问题
+我们需要回滚到 v2。
+
+查看 Deployment 更新历史：
+kubectl rollout history deployment/springboot-demo -n dev
+回滚上一个版本：kubectl rollout undo deployment/springboot-demo -n dev
+查看回滚状态：kubectl rollout status deployment/springboot-demo -n dev
+也可以指定历史版本：
+kubectl rollout undo deployment/springboot-demo \
+  --to-revision=2 \
+  -n dev
+
+Jenkins 也可以将回滚操作编写成一个独立的 Pipeline。
+需要注意：Deployment 回滚只恢复工作负载配置，不会自动恢复数据库的数据结构或数据。
+
+十五、Jenkins 和 Argo CD 有什么区别？
+这是本课特别值得理解的知识点。
+因为第18课我们已经学习过 GitOps 和 Argo CD。
+
+两者都能参与自动化部署，但工作方式不同。
+对比		Jenkins		Argo CD
+核心定位		自动化构建和交付	GitOps 持续部署
+代码编译		擅长		不负责
+Maven构建	支持		不负责
+Docker 镜像构建	支持		不负责
+镜像推送		支持		不负责
+Kubernetes 部署	支持		核心功能
+状态同步		流水线执行	持续监控 Git 与集群
+配置回滚		可以编写流程	支持 Git 版本回退和同步
+
+更推荐的企业级架构：Jenkins + Argo CD：企业级 CI/CD + GitOps 架构
+
+开发人员提交代码
+GitHub / GitLab
+↓
+Jenkins
+编译 → 测试 → 构建镜像 → 推送镜像
+↓
+更新 Kubernetes YAML 配置仓库
+修改 Deployment 镜像版本
+↓
+Argo CD
+检测 Git 配置变化，自动同步
+↓
+Kubernetes 集群
+滚动更新，运行新版本 Pod
+
+这种方式的优势：
+- Jenkins 专注于 CI。
+- Argo CD 专注于 CD。
+- Kubernetes 配置保存在 Git 中。
+- 所有部署变更都有 Git 历史记录。
+- 不需要 Jenkins 直接持有集群管理员权限。
+这也是建议你后续重点掌握的企业级部署模式。
+
+十六、本课实战任务
+建议不要只看理论，最好完成以下实验。
+第19课实验任务清单
+完成进度
+0/14
+[ ] 准备一台 Rocky Linux 9.8 Jenkins 服务器
+[ ] 安装 Java 和 Jenkins
+[ ] 完成 Jenkins Web 初始化
+[ ] 安装 Git、Pipeline 等插件
+[ ] 配置 Git 仓库认证
+[ ] 准备一个 Spring Boot 示例项目
+[ ] 配置 Maven 自动编译和测试
+[ ] 编写 Dockerfile 并构建镜像
+[ ] 将镜像推送到镜像仓库
+[ ] 创建 Kubernetes 专用 ServiceAccount 和 RBAC
+[ ] 使用 Jenkins 自动更新 Kubernetes Deployment
+[ ] 配置 GitHub Webhook 自动触发
+[ ] 测试 Deployment 滚动更新和回滚
+[ ] 理解 Jenkins + Argo CD GitOps 联合部署
+
+重置实验进度
+本课重点命令汇总
+命令			作用
+systemctl start jenkins	启动 Jenkins
+systemctl status jenkins	查看 Jenkins 状态
+mvn clean package		Maven 编译打包
+docker build -t app:v1 .	构建镜像
+docker push app:v1		推送镜像
+kubectl apply -f app.yaml	应用 Kubernetes 配置
+kubectl set image		更新 Deployment 镜像
+kubectl rollout status	查看滚动更新状态
+kubectl rollout history	查看发布历史
+kubectl rollout undo	回滚 Deployment
+
+十七、第19课知识总结
+学完本课，你应该能够理解：
+1. CI 和 CD 的区别。
+2. Jenkins 的作用及基本架构。
+3. Jenkins Job、Pipeline、Stage、Agent 的概念。
+4. Jenkins 如何集成 Git、Maven 和 Docker。
+5. 如何通过 Jenkinsfile 定义自动化流水线。
+6. Jenkins 如何访问 Kubernetes API。
+7. 如何实现 Deployment 自动更新。
+8. 如何通过 GitHub Webhook 自动触发构建。
+9. 如何实现 Kubernetes 应用回滚。
+10. Jenkins 与 Argo CD 如何协同实现企业级 GitOps。
+
+这一课最重要的成果：把以前需要人工执行的代码编译、镜像构建、镜像推送和 Kubernetes 部署，串联成自动化流水线。

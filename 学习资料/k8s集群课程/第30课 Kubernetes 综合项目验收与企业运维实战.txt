@@ -1,0 +1,508 @@
+恭喜你，终于学到 Kubernetes 系列课程的最后一课了！从最初在 VMware 中安装 Rocky Linux 9.8，到部署 Kubernetes 集群，
+再到学习 Deployment、Service、Ingress、PV/PVC、Helm、Prometheus、Grafana、Jenkins、Argo CD、Istio 等技术
+，现在我们要把这些知识串联起来。
+第30课不是再学习一个新的 Kubernetes 组件，而是模拟一家企业的真实运维场景，完成一次完整的 Kubernetes 项目交付。
+
+本课的最终目标是：
+1. 能够独立部署一个企业级 Kubernetes 应用平台。
+2. 能够完成 Java 微服务应用的部署、升级和回滚。
+3. 能够实现监控、日志、告警和故障排查。
+4. 能够完成集群备份、恢复和日常维护。
+5. 能够编写企业运维文档，具备独立维护 Kubernetes 集群的能力。
+
+一、本课程最终项目架构
+我们模拟一家企业，准备把原来运行在 Docker Compose 中的 Java 微服务项目迁移到 Kubernetes。
+项目包含以下服务：
+- Nginx：入口代理。
+- Gateway：微服务网关。
+- User Service：用户服务。
+- Order Service：订单服务。
+- Redis：缓存。
+- MySQL：关系型数据库。
+- RabbitMQ：消息队列。
+这里继续使用你已经搭建好的三节点集群，不需要重新安装 Kubernetes。
+注意：目前这套三节点实验集群是单 Master 架构，不是生产级多 Master 高可用架构。
+我们会把生产环境需要的高可用方案作为验收知识点。
+
+二、最终项目验收清单
+本课分成八个验收模块。
+模块1：集群健康检查
+首先检查整个集群是否正常。
+# 查看所有节点
+kubectl get nodes -o wide
+# 查看所有命名空间
+kubectl get ns
+# 查看所有 Pod
+kubectl get pods -A -o wide
+# 查看所有 Service
+kubectl get svc -A
+# 查看集群组件
+kubectl get componentstatuses
+# 查看集群事件
+kubectl get events -A --sort-by='.lastTimestamp'
+# 查看资源使用情况
+kubectl top nodes
+kubectl top pods -A
+注意：componentstatuses 在现代 Kubernetes 中已经弃用，不应将其作为健康检查的主要依据。
+主要观察节点状态、系统 Pod、API Server 和实际业务请求。
+
+验收标准：
+- 三个节点均为 Ready。
+- Calico 网络组件正常。
+- CoreDNS 正常。
+- 所有关键业务 Pod 正常。
+- 没有持续出现的 CrashLoopBackOff、ImagePullBackOff。
+- 节点 CPU、内存、磁盘没有明显资源压力。
+
+模块2：企业应用部署验收
+创建一个企业项目专用命名空间。
+kubectl create namespace production
+以后所有企业业务都部署在 production 中。
+
+先部署 Nginx，作为我们的测试业务。
+kubectl create deployment nginx \
+  --image=nginx:1.27 \
+  --replicas=3 \
+  -n production
+
+查看部署情况：
+kubectl get deployment -n production
+kubectl get pods -n production -o wide
+kubectl rollout status deployment/nginx -n production
+
+创建 Service：
+kubectl expose deployment nginx \
+  --name=nginx-service \
+  --port=80 \
+  --target-port=80 \
+  --type=NodePort \
+  -n production
+
+查看端口：kubectl get svc -n production
+然后在 Windows 浏览器中访问：http://192.168.79.130:节点端口
+这里的节点端口以 kubectl get svc 实际显示的结果为准。
+
+接下来模拟企业业务升级。
+kubectl set image deployment/nginx \
+  nginx=nginx:1.28 \
+  -n production
+观察升级过程：
+kubectl rollout status deployment/nginx -n production
+kubectl rollout history deployment/nginx -n production
+如果升级失败，执行回滚：kubectl rollout undo deployment/nginx -n production
+再次检查：kubectl get pods -n production
+kubectl describe deployment nginx -n production
+
+验收标准：
+- 能够部署多个副本。
+- 能够通过 Service 访问业务。
+- 能够升级容器镜像。
+- 能够查看发布历史。
+- 能够回滚到之前的版本。
+这就是企业最基本的应用发布和版本管理能力。
+
+模块3：企业资源管理与弹性伸缩
+企业不能让一个 Pod 无限占用服务器资源。
+我们需要给应用设置 CPU 和内存限制。
+创建文件：vi nginx-resource.yaml
+写入：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-resource
+  namespace: production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-resource
+  template:
+    metadata:
+      labels:
+        app: nginx-resource
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+应用配置：kubectl apply -f nginx-resource.yaml
+查看：kubectl describe deployment nginx-resource -n production
+接着设置 HPA：
+kubectl autoscale deployment nginx-resource \
+  --cpu-percent=70 \
+  --min=2 \
+  --max=5 \
+  -n production
+查看：kubectl get hpa -n production
+这里要求 Metrics Server 正常工作，并且容器配置了 CPU requests，否则 CPU 利用率无法正确计算。
+
+验收标准：
+- 能够配置 requests 和 limits。
+- 能够设置 HPA。
+- 能够观察 Pod 自动扩容和缩容。
+- 能够使用 ResourceQuota 限制命名空间资源。
+
+模块4：企业数据持久化与备份
+这是非常重要的一个模块。企业业务数据不能随着 Pod 删除而丢失。
+需要掌握：
+技术	企业用途
+PV	提供持久化存储资源
+PVC	应用申请存储空间
+StorageClass	动态创建存储
+StatefulSet	部署有状态服务
+VolumeSnapshot	存储卷快照（需要相应驱动支持）
+etcd 备份	备份 Kubernetes 集群状态
+
+首先查看存储：
+kubectl get pv
+kubectl get pvc -A
+kubectl get storageclass
+查看之前学习的动态 PVC：
+kubectl get pvc -A -o wide
+
+
+然后模拟数据持久化：
+kubectl create deployment storage-test \
+  --image=nginx:1.27 \
+  -n production
+企业环境中，我们通常使用 PVC 将数据挂载到容器。
+这里要特别区分：
+- etcd 备份：保存 Kubernetes 集群对象和配置。
+- MySQL 数据备份：保存实际业务数据库。
+- PV 数据备份：保护持久化文件。
+- 镜像仓库备份：保护应用部署所需的镜像。
+它们不是同一回事，不能只备份 etcd 就认为企业数据安全了。
+
+etcd 备份示例：
+在 Master 节点上先确认 etcd 证书路径：
+ls -l /etc/kubernetes/pki/etcd/
+kubeadm 默认环境下可以参考：
+ETCDCTL_API=3 etcdctl snapshot save /root/etcd-backup.db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key
+
+检查备份：ETCDCTL_API=3 etcdctl snapshot status /root/etcd-backup.db -w table
+注意：执行前必须确认 etcd 实际证书、监听地址和版本。恢复操作属于集群级高风险操作，不能直接在现有学习集群上随意执行。
+
+验收标准：
+- 能够创建 PVC。
+- 能够将 PVC 挂载到 Pod。
+- 删除并重建 Pod 后数据仍然存在。
+- 能够完成 etcd 快照备份。
+- 能够说明 MySQL 数据备份和 etcd 备份的区别。
+
+模块5：企业监控与日志管理
+企业运维人员不能每天靠 SSH 登录服务器查看 Pod。
+需要建立集中监控体系。
+监控技术栈：
+工具		主要用途
+Prometheus	指标采集和存储
+Grafana		可视化监控
+Alertmanager	告警管理
+Node Exporter	主机指标
+kube-state-metrics	Kubernetes 对象状态指标
+Fluent Bit		日志采集
+Elasticsearch	日志存储和检索
+
+重点掌握以下监控内容：
+1. Master 节点 CPU、内存、磁盘。
+2. Worker 节点 CPU、内存、磁盘。
+3. Pod 重启次数。
+4. Pod CPU 和内存使用率。
+5. Deployment 可用副本数。
+6. PVC 使用率。
+7. API Server 状态。
+8. CoreDNS 状态。
+日志查看：
+# 查看 Pod 日志
+kubectl logs <pod名称> -n production
+# 实时查看
+kubectl logs -f <pod名称> -n production
+# 查看上一个容器实例的日志
+kubectl logs <pod名称> -n production --previous
+# 查看 Pod 事件
+kubectl describe pod <pod名称> -n production
+企业监控的三个重要概念：
+- Metrics：指标。
+- Logs：日志。
+- Traces：链路追踪。
+这三个方面结合起来，才能实现完整的可观测性。
+验收标准：
+- Grafana 能够看到节点监控。
+- 能够查看 Pod 资源使用情况。
+- 能够查询业务日志。
+- 能够配置告警规则。
+- 能够发现 Pod 异常重启和节点资源不足。
+
+模块6：企业 CI/CD 自动化部署
+前面第18课和第19课已经学习了 GitOps、Argo CD 和 Jenkins。
+现在把它们组合起来。完整流程：
+
+开发人员提交 Java 代码
+Git 仓库
+	↓
+Jenkins 自动构建
+Maven 编译、单元测试
+	↓
+构建 Docker 镜像
+推送到镜像仓库
+	↓
+更新 Kubernetes 部署配置
+GitOps 配置仓库
+	↓
+Argo CD 同步到 Kubernetes
+自动部署、状态监控
+
+需要实现：
+- 开发人员提交代码。
+- Jenkins 自动构建 Java 项目。
+- 自动生成镜像。
+- 推送镜像到国内可访问的镜像仓库。
+- 更新 Helm 或 Kubernetes YAML 配置。
+- Argo CD 检测 Git 变化。
+- 自动同步到 Kubernetes。
+- 发布失败能够回滚。
+这里建议继续使用你之前安装的 Helm 4.3.0，不需要为了这节课重新安装 Helm 3。
+验收标准： 修改一次 Java 代码，能够通过流水线完成构建、镜像发布和 Kubernetes 部署。
+
+模块7：企业安全与权限管理
+企业集群不能所有人都使用 root 或 cluster-admin 权限。
+重点检查：
+# 查看所有 ServiceAccount
+kubectl get serviceaccount -A
+# 查看所有 Role
+kubectl get role -A
+# 查看 ClusterRole
+kubectl get clusterrole
+# 查看 RoleBinding
+kubectl get rolebinding -A
+# 查看 ClusterRoleBinding
+kubectl get clusterrolebinding
+
+模拟创建一个只读运维人员：
+kubectl create serviceaccount viewer \
+  -n production
+
+创建只读权限：
+kubectl create role pod-reader \
+  --verb=get,list,watch \
+  --resource=pods \
+  -n production
+
+绑定权限：
+kubectl create rolebinding pod-reader-binding \
+  --role=pod-reader \
+  --serviceaccount=production:viewer \
+  -n production
+
+测试权限：
+kubectl auth can-i get pods \
+  --as=system:serviceaccount:production:viewer \
+  -n production
+
+kubectl auth can-i delete pods \
+  --as=system:serviceaccount:production:viewer \
+  -n production
+
+预期结果：
+- 查询 Pod：yes。
+- 删除 Pod：no。
+同时检查：
+- RBAC 权限是否合理。
+- Secret 是否受到保护。
+- NetworkPolicy 是否限制不必要的网络访问。
+- 容器是否使用非 root 用户。
+- 镜像是否经过安全扫描。
+- 是否存在不必要的特权容器。
+企业还应考虑 etcd 数据加密和审计日志。
+Kubernetes+1
+
+模块8：企业故障应急处理
+这是最能体现 Kubernetes 运维水平的部分。
+企业运维不能只会部署，还必须能够处理突发故障。
+
+下面模拟六种故障。
+故障场景			排查方向
+Pod CrashLoopBackOff	容器日志、启动参数、探针
+ImagePullBackOff		镜像地址、仓库认证、网络
+Pod Pending		资源不足、节点亲和性、污点
+Node NotReady		kubelet、containerd、网络
+Service 无法访问		Endpoint、端口、网络策略
+PVC Pending		StorageClass、PV、存储配置
+
+故障演练1：模拟 Pod 删除
+kubectl get pods -n production
+删除一个 Nginx Pod：
+kubectl delete pod <pod名称> -n production
+观察：
+kubectl get pods -n production -w
+Deployment 应自动创建新的 Pod。
+
+故障演练2：模拟节点维护
+选择一个 Worker 节点：
+kubectl drain k8s-node1 \
+  --ignore-daemonsets \
+  --delete-emptydir-data
+观察业务 Pod 是否调度到其他节点。
+演练结束后：
+kubectl uncordon k8s-node1
+
+注意：执行 drain 前先确认该节点上的业务副本、PDB、存储绑定和剩余节点容量。不要在唯一承载业务的节点上直接演练。
+
+故障演练3：模拟应用版本回滚
+kubectl rollout history deployment/nginx \
+  -n production
+kubectl rollout undo deployment/nginx \
+  -n production
+
+故障演练4：模拟节点资源不足
+使用：kubectl describe node k8s-node1
+
+重点观察：
+- Allocatable。
+- Allocated resources。
+- Conditions。
+- Events。
+- Taints。
+
+故障演练5：排查网络故障
+kubectl get pods -n kube-system -o wide
+kubectl get pods -n calico-system -o wide
+kubectl get endpoints -n production
+kubectl get svc -n production
+
+故障演练6：模拟业务服务不可用
+kubectl get deployment -n production
+kubectl get pods -n production
+kubectl describe svc nginx-service -n production
+逐步判断故障发生在 Pod、Service、Ingress 还是集群网络层。
+
+三、最终综合项目验收
+前面八个模块学习完毕，我们就进行一次正式的毕业项目验收。
+这次不再是单独执行某条命令，而是要求你独立完成一个完整项目。
+1. 毕业项目要求
+企业 Java 微服务 Kubernetes 平台
+最终毕业项目
+项目要求
+- Kubernetes 三节点集群正常运行。
+- 部署企业 Java 微服务应用。
+- 使用 Ingress 对外提供访问入口。
+- 使用 Service 实现内部服务通信。
+- 使用 ConfigMap 和 Secret 管理配置。
+- 使用 PVC 实现持久化存储。
+- 使用 Helm 管理应用。
+- 使用 HPA 实现弹性扩缩容。
+- 使用 Prometheus、Grafana 监控。
+- 使用 Jenkins、Argo CD 实现自动化发布。
+- 使用 RBAC、NetworkPolicy 管理安全。
+- 完成备份、恢复及故障演练。
+ 
+  最终交付物
+1. Kubernetes 项目部署 YAML 文件。
+2. Helm Chart 项目。
+3. Java 微服务 Dockerfile。
+4. Jenkins Pipeline 配置文件。
+5. Argo CD Application 配置文件。
+6. 监控及告警配置。
+7. etcd 备份文件和恢复操作文档。
+8. 企业运维手册。
+
+2. 毕业考核评分
+考核项目	分值
+集群部署与健康检查	10
+Deployment、Service、Ingress	15
+存储与数据持久化	10
+Helm 应用管理	10
+CI/CD 自动化部署	15
+监控与日志管理	15
+安全与权限管理	10
+故障排查与恢复	15
+总分	100
+
+评分标准：
+- 60分：掌握 Kubernetes 基本运维。
+- 70分：能够独立部署普通业务。
+- 80分：具备较完整的企业应用部署能力。
+- 90分：具备较强的自动化运维和故障处理能力。
+- 95分以上：能够独立规划、交付和维护较完整的 Kubernetes 平台。
+这里的分数是本课程的学习考核标准，不代表实际企业招聘认证。
+
+四、企业生产环境与当前实验环境的区别
+这一点我特别强调一下。你现在使用的是 VMware Workstation + Rocky Linux 9.8 + 三节点 Kubernetes v1.37.2。
+它非常适合学习、开发、测试和模拟企业部署，但不能直接等同于真正的企业生产集群。
+对比项目	当前学习环境		企业生产环境
+Master	1个			通常3个或更多，按架构设计
+Worker	2个			按业务容量扩展
+存储	Local Path 等实验存储	高可用分布式或企业存储
+网络	Calico			高可用网络方案
+入口	NodePort / Ingress		高可用负载均衡入口
+数据库	可使用单实例练习		高可用、备份及容灾
+监控	Prometheus + Grafana	完整监控告警体系
+发布	Helm / Argo CD		完整 CI/CD 和发布治理
+备份	etcd 快照			etcd、业务数据、存储多层备份
+高可用	单 Master 实验集群		控制面、业务、存储多层高可用
+
+尤其是 Master 高可用：
+真正的生产环境一般需要：
+- 至少三个控制平面节点，构建合理的故障容忍能力。
+- API Server 前面配置负载均衡。
+- etcd 使用奇数成员，保证法定人数。
+- Worker 节点具备业务冗余。
+- 业务 Pod 使用副本和反亲和性。
+- 数据库及存储具备独立的高可用方案。
+例如三个 etcd 成员能够容忍一个成员故障，但两个成员故障就无法维持多数派。
+Kubernetes 官方生产环境指南也明确强调了控制面冗余、API Server 负载均衡和 etcd 备份的重要性。
+
+五、最终毕业实践：你需要亲手完成的任务
+我建议不要一次性把八个模块全部安装完。
+我们把毕业项目分成五个阶段：
+1. 阶段一：集群验收
+   检查三个节点、Calico、CoreDNS、Metrics Server、存储和集群健康状态。
+   基础环境验收
+2. 阶段二：企业应用部署
+   部署 Java 微服务、MySQL、Redis、RabbitMQ，配置 Ingress、Service、PVC、ConfigMap 和 Secret。
+   业务平台验收
+3. 阶段三：自动化与监控
+   完成 Helm、Jenkins、Argo CD、Prometheus、Grafana 的集成。
+   自动化平台验收
+4. 阶段四：安全与高可用
+   完成 RBAC、NetworkPolicy、etcd 备份、节点维护和故障恢复演练。
+   企业运维验收
+5. 阶段五：毕业交付
+   整理 YAML、Helm Chart、部署文档、运维手册和故障处理记录。
+   最终项目验收
+
+六、Kubernetes 30课正式结束
+从第1课到第30课，我们已经覆盖了以下知识体系：
+学习阶段		核心内容
+第1～10课	Kubernetes 基础、工作负载、网络、存储
+第11～15课	调度、伸缩、安全、RBAC、网络策略
+第16～19课	监控、Helm、GitOps、Jenkins
+第20～23课	微服务实战、高可用、多集群、平台建设
+第24～28课	Istio、故障排查、安全、CRD、生产运维
+第29～30课	Java 微服务完整上云、综合项目验收
+
+我的建议：不要把第30课当作看完就结束的课程，而是把它当作真正开始动手做项目的起点。
+你已经有三台 Rocky Linux 虚拟机，不需要重新搭建环境。后面我们就基于现有集群，逐步完成真正的企业项目。
+
+可以把最终项目命名为：
+Enterprise-Kubernetes-Microservices-Platform
+以后这个项目也可以整理成 GitHub 项目，用于展示你的 Kubernetes 实践能力。
+
+官方学习参考：
+- Kubernetes 生产环境部署指南：https://kubernetes.io/docs/setup/production-environment/
+- Kubernetes 集群管理手册：https://kubernetes.io/docs/tasks/administer-cluster/
+- Kubernetes 可观测性指南：https://kubernetes.io/docs/concepts/cluster-administration/observability/
+- Kubernetes 健康检查机制：https://kubernetes.io/docs/concepts/workloads/pods/probes/
+最后，恭喜你完成 Kubernetes 30 课理论与实战知识体系的学习！

@@ -1,0 +1,17 @@
+### 一、常见问题及解决方法
+
+| 问题现象 | 可能原因 | 解决方法 |
+|---|---|---|
+| `mount.nfs: No route to host` | 防火墙阻止 | 放行 NFS 端口或关闭防火墙 |
+| `mount.nfs: access denied` | exports 配置错误 | 检查客户端 IP 格式及 exports 配置 |
+| `mount.nfs: Stale file handle` | 服务端共享目录被删除 | 重新挂载 |
+| `showmount: RPC: Program not registered` | NFS 服务未启动 | `systemctl start nfs-server` |
+| 挂载后看不到文件 | 目录权限问题 | `chmod 755 /export/share` |
+
+### 二、推荐调试命令
+
+| 用途 | 命令 |
+|---|---|
+| 服务端：查看 NFS 日志 | `tail -f /var/log/messages \| grep nfs` |
+| 服务端：查看当前连接的客户端 | `showmount -a` |
+| 客户端：查看 NFS 挂载参数 | `cat /proc/mounts \| grep nfs` |

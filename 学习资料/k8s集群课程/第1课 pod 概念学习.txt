@@ -1,0 +1,289 @@
+我们正式开始 Kubernetes 第一课：Pod。
+
+这节课不只是创建一个 Nginx 容器，而是要搞清楚一个核心问题：
+Docker 中我们直接创建 Container，为什么到了 Kubernetes，却要先创建 Pod，再在 Pod 里面运行 Container？
+你之前已经学过 Docker、Docker Compose 和 Linux 容器网络，这些知识正好可以用来理解 Pod。
+
+第一课：Pod
+一、Pod 到底是什么？
+先看 Kubernetes 的架构层次：
+	Kubernetes Cluster（整个集群）
+Node 1		Node 2
+Pod A		Pod B
+Container		Container
+
+这里有三个概念：
+名称	含义
+Cluster	Kubernetes 集群
+Node	集群中的工作节点，运行 Pod
+Pod	Kubernetes 最小调度单位，里面运行一个或多个容器
+
+注意：
+- Node 是物理机或虚拟机。
+- Pod 是 Kubernetes 调度和管理的基本单位。
+- Container 才是真正运行应用程序的容器。
+例如，你的三台 Rocky Linux 虚拟机就是三个 Node。
+
+Kubernetes 可以把一个 Pod 调度到任意一个符合条件的 Node 上运行。
+二、为什么不直接管理 Container？
+这是一个非常重要的问题。
+
+你之前使用 Docker 时，大概是这样：
+Docker Host
+    |
+    |-- Container A（Nginx）
+    |
+    |-- Container B（Java）
+    |
+    |-- Container C（Redis）
+Docker 可以直接创建、启动和管理 Container。
+
+但是 Kubernetes 选择了另一种设计：
+Kubernetes Node
+    |
+    |-- Pod A
+    |     |
+    |     |-- Container A
+    |     |-- Container B
+    |
+    |-- Pod B
+          |
+          |-- Container C
+
+为什么？
+因为有些容器本身就是需要紧密协作的。
+
+例如：
+- 主容器：Java 应用。
+- 辅助容器：日志采集程序。
+它们需要共享网络、共享文件，生命周期也可能需要协同。
+
+如果让 Kubernetes 分别管理两个独立容器，就不容易表达这种紧密关系。
+所以 Kubernetes 引入了 Pod 这一层抽象。
+Pod 把一个或多个紧密协作的容器组合成一个整体进行调度和管理。
+
+注意：并不是把所有微服务都放进一个 Pod。通常一个微服务实例对应一个 Pod，多个副本由 Deployment 管理。
+
+三、Pod 最重要的特性：共享网络
+这是你需要重点理解的地方。
+
+假设一个 Pod 里面运行两个容器：
+Pod
+ |
+ |-- Container A（Java）
+ |
+ |-- Container B（日志采集）
+
+它们有以下特点：
+1. 共享同一个网络命名空间。
+2. 共享同一个 Pod IP。
+3. 共享端口空间，不能同时监听相同 IP 和端口。
+4. 可以通过 localhost 相互通信。
+
+例如：
+Java 容器监听 8080 端口，日志采集容器可以通过下面的地址访问 Java：
+curl http://localhost:8080
+
+这里的 localhost 指的是 Pod 的网络命名空间，而不是整个 Node。
+Pod 的网络结构
+Node：k8s-node1
+
+Pod共享网络
+Pod IP：10.244.x.x(共享网络命名空间)
+
+Java			Sidecar
+监听 8080			访问 localhost:8080	
+
+这里还有一个值得了解的底层知识：
+Kubernetes 通常会在 Pod 中使用一个基础设施容器（常称为 Pause 容器），负责承载 Pod 的共享网络命名空间。
+其他业务容器加入这个网络命名空间。
+所以你可能会在 containerd 的容器列表中看到类似 pause 的容器。
+注意：Pause 容器不是用来运行你的业务程序的。
+
+四、Pod 还可以共享存储
+除了网络，Pod 中的多个容器还可以共享 Volume。
+例如：
+Pod
+ |
+ |-- Java Container
+ |      |
+ |      |-- 挂载 /data/logs
+ |
+ |-- Log Container
+        |
+        |-- 挂载 /data/logs
+
+两个容器都挂载同一个 Volume，就可以访问相同的文件。
+这在日志采集、代理容器、辅助处理等场景非常有用。
+后面学习 Volume、PV、PVC 时，我们会专门研究。
+
+五、创建第一个 Pod
+理论了解之后，开始在你的三节点集群中实操。
+1. 编写 YAML 文件
+在 Master 上执行：
+vim nginx-pod.yaml
+
+写入：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+  labels:
+    app: nginx
+spec:
+  containers:
+    - name: nginx
+      image: nginx:1.27
+      ports:
+        - containerPort: 80
+
+逐项解释：
+字段	作用
+apiVersion	使用的 Kubernetes API 版本
+kind	资源类型，这里是 Pod
+metadata	Pod 的元数据信息
+name	Pod 名称
+labels	标签，用于识别和筛选资源
+spec	Pod 的期望配置
+containers	Pod 中的容器列表
+name	容器名称
+image	容器镜像
+ports	声明容器使用的端口
+
+特别注意：
+containerPort: 80 只是声明容器使用的端口，并不会自动把 Node 的 80 端口开放出来。后面需要通过 Service 实现访问。
+2. 创建 Pod
+kubectl apply -f nginx-pod.yaml
+查看：
+kubectl get pods
+
+查看详细信息：
+kubectl get pods -o wide
+
+你可能看到类似：
+NAME        READY   STATUS    RESTARTS   AGE   IP
+nginx-pod   1/1     Running   0          20s   10.244.1.5
+
+这里重点关注：
+- READY：容器就绪数量 / 容器总数量。
+- STATUS：Pod 当前状态。
+- RESTARTS：容器重启次数。
+- IP：Pod IP 地址。
+- NODE：Pod 被调度到哪个节点。
+
+3. 查看 Pod 详细信息
+kubectl describe pod nginx-pod
+
+这个命令非常重要。
+以后排查 Pod 创建失败、镜像拉取失败、调度失败等问题，经常需要用它。
+尤其关注最后的 Events 部分。
+
+4. 查看容器日志
+kubectl logs nginx-pod
+
+5. 进入容器
+kubectl exec -it nginx-pod -- bash
+
+进入后执行：
+hostname
+ip addr
+nginx -v
+你会发现容器拥有自己的网络环境。
+
+退出：
+exit
+
+
+六、Pod 的生命周期
+Pod 并不是创建之后就一直处于 Running。
+常见状态：
+状态	含义
+Pending	等待调度或准备运行
+Running	Pod 已绑定节点，至少一个容器正在运行或启动
+Succeeded	所有容器成功终止
+Failed	所有容器已经终止，且至少一个失败
+Unknown	无法获取 Pod 状态
+
+另外，CrashLoopBackOff 也经常出现，但它不是 Pod 的正式生命周期阶段，而是容器反复启动失败时的一种等待状态。
+
+Pod 的生命周期大致如下：
+创建 Pod
+   |
+   v
+ Pending
+   |
+   v
+ Running
+   |
+   +------> Succeeded
+   |
+   +------> Failed
+
+注意：Pod 通常是短暂存在的对象。
+
+如果 Pod 被删除，它不会自动以原来的身份重新出现。后面学习 Deployment 时，你就会明白为什么需要控制器来管理 Pod。
+七、理解一个重要问题：Pod 为什么会被调度到不同节点？
+你的集群现在有三个节点：
+k8s-master
+k8s-node1
+k8s-node2
+
+默认情况下，如果没有设置节点约束，Kubernetes Scheduler 会根据资源情况、调度策略等因素选择合适的节点。
+
+可以通过：
+kubectl get pods -o wide
+
+查看 Pod 被分配到了哪台机器。
+
+如果想指定节点，后面可以学习：
+- nodeSelector
+- Node Affinity
+- Taints 和 Tolerations
+目前先不深入。
+
+八、这一课的实操任务
+现在先不要急着学习 Deployment，我给你安排几个实验。
+Pod 实验清单
+0/6 已完成
+
+[ ] 1. 创建 nginx-pod.yaml 并部署 Nginx Pod
+kubectl apply -f nginx-pod.yaml
+
+[ ] 2. 查看 Pod 详细信息
+kubectl describe pod nginx-pod
+
+[ ] 3. 查看 Pod 所在节点和 IP
+kubectl get pods -o wide
+
+[ ] 4. 进入容器，执行 hostname、ip addr
+kubectl exec -it nginx-pod -- bash
+
+[ ] 5. 查看 Nginx 容器日志
+kubectl logs nginx-pod
+
+[ ] 6. 删除 Pod
+kubectl delete pod nginx-pod
+
+九、课后思考
+这几个问题很重要，你可以先自己思考，不用着急查答案。
+Pod 基础理解测试
+1. 一个 Pod 中运行两个容器，它们的 IP 地址是什么关系？
+各自拥有独立 IP
+共享同一个 Pod IP
+由 Service 分配 IP
+回答正确
+同一个 Pod 内的容器共享网络命名空间，因此共享 Pod IP。
+
+2. Pod 中的两个容器能否同时监听 8080 端口？
+可以，容器相互隔离
+不可以，共享端口空间
+由 Kubernetes 自动分配不同端口
+回答正确
+它们共享网络命名空间，不能同时绑定同一个 IP 和端口。
+
+3. 直接使用 kubectl 创建的 Pod 被删除后，会自动重新创建吗？
+会，Kubernetes 会自动恢复所有 Pod
+不会，除非有控制器负责管理它
+只有 Master 能重新创建
+回答正确
+裸 Pod 没有副本控制器管理，删除后不会自动重建。Deployment 后面会解决这个问题。

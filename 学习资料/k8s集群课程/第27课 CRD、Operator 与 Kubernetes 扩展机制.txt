@@ -1,0 +1,563 @@
+前面我们学习的 Deployment、Service、StatefulSet、HPA、RBAC、Helm、Istio 等，基本都是k8s已经提供的功能。
+从今天开始，我们要学习如何扩展 Kubernetes 本身的功能，让 Kubernetes 能够管理自己原本不认识的资源和应用。
+例如：
+- Kubernetes 原生认识 Pod、Deployment、Service。
+- 但是 Kubernetes 原生并不认识 MySQLCluster、RedisCluster、RabbitMQCluster。
+- 如果我们希望直接通过 kubectl 创建一个 MySQL 集群，并让 Kubernetes 自动完成部署、扩容、故障恢复，就需要 CRD 和 Operator。
+这也是很多企业级 Kubernetes 平台的重要技术。
+
+一、本节课学习目标
+本节课分成六个部分：
+序号	学习内容			目标
+1	Kubernetes 扩展机制	理解 Kubernetes 如何扩展
+2	CRD			自定义 Kubernetes 资源类型
+3	CR			创建自定义资源实例
+4	Controller		理解控制器工作原理
+5	Operator			自动化管理复杂应用
+6	综合实战			编写一个简单 Operator
+
+完成本节课后，你应该能够：
+1. 理解 CRD、CR、Controller、Operator 之间的关系。
+2. 自己定义一个 Kubernetes 资源。
+3. 使用 kubectl 创建和管理自定义资源。
+4. 理解 Operator 如何自动创建 Deployment 和 Service。
+5. 知道企业中的 MySQL、Redis、RabbitMQ Operator 是如何工作的。
+
+二、Kubernetes 为什么需要扩展机制？
+先回顾一下 Kubernetes 原生资源。
+kubectl api-resources
+你会看到类似：
+NAME                  SHORTNAMES
+pods                  po
+services              svc
+deployments           deploy
+replicasets           rs
+statefulsets          sts
+daemonsets            ds
+jobs
+cronjobs
+configmaps            cm
+secrets
+persistentvolumes    pv
+persistentvolumeclaims pvc
+这些都是 Kubernetes 已经认识的资源。
+
+假设我们现在想管理一个 MySQL 数据库集群。
+我们希望执行：kubectl create -f mysql-cluster.yaml
+配置文件内容：
+apiVersion: database.example.com/v1
+kind: MySQLCluster
+metadata:
+  name: mysql-prod
+spec:
+  replicas: 3
+  version: "8.4"
+  storage: 20Gi
+问题来了：Kubernetes 原生并不认识 MySQLCluster 这个资源类型。
+执行之后就可能报错：no matches for kind "MySQLCluster"
+因为 Kubernetes API Server 不知道 MySQLCluster 是什么。
+怎么办？这就需要 CRD。
+
+三、CRD：自定义资源定义
+CRD 全称：CustomResourceDefinition（自定义资源定义）
+它的作用就是告诉 Kubernetes：我现在要新增一种资源类型，请 Kubernetes 认识它，并允许用户通过 YAML 创建、查询、删除这种资源。
+例如：
+- MySQLCluster
+- RedisCluster
+- RabbitMQCluster
+- ElasticsearchCluster
+- KafkaCluster
+这些都可以通过 CRD 扩展出来。
+
+3.1 创建第一个 CRD
+我们先不急着部署复杂 Operator。
+先创建一个最简单的自定义资源类型：WebApp
+在 k8s-master 上执行：
+mkdir -p /root/k8s-course/lesson27
+cd /root/k8s-course/lesson27
+创建文件：vi webapp-crd.yaml
+写入：
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: webapps.example.com
+spec:
+  group: example.com
+
+  names:
+    kind: WebApp
+    plural: webapps
+    singular: webapp
+    shortNames:
+      - wa
+
+  scope: Namespaced
+
+  versions:
+    - name: v1
+      served: true
+      storage: true
+
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas:
+                  type: integer
+                  minimum: 1
+
+                image:
+                  type: string
+
+                port:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
+              required:
+                - replicas
+                - image
+                - port
+
+
+这里有几个关键参数：
+参数	含义
+group	API 资源组
+kind	资源类型名称
+plural	资源复数名称
+singular	资源单数名称
+shortNames	资源简称
+scope	资源作用范围
+versions	API 版本
+schema	自定义资源的数据结构
+
+注意：
+scope: Namespaced 表示资源属于命名空间。
+如果设置为 Cluster，则是集群级资源。
+
+3.2 部署 CRD
+kubectl apply -f webapp-crd.yaml
+查看 CRD：kubectl get crd
+你应该看到：
+NAME
+webapps.example.com
+查看资源定义：kubectl describe crd webapps.example.com
+
+3.3 验证 Kubernetes 是否认识 WebApp
+执行：kubectl api-resources | grep webapp
+预期结果：
+webapps    wa    example.com/v1    true    WebApp
+这时候 Kubernetes 已经认识 WebApp 这种资源类型了。
+第一个目标完成
+
+四、CR：创建自定义资源实例
+CR 全称：Custom Resource（自定义资源）
+CRD 是资源类型的定义，而 CR 是这个类型的具体实例。
+可以这样理解：
+概念	类比
+CRD	Java 类
+CR	Java 对象
+Controller	负责处理对象的程序
+现在我们已经创建了 WebApp 这个资源类型。
+接下来创建一个实际的 WebApp 实例。
+
+4.1 创建 WebApp
+创建文件：vi webapp.yaml
+内容：
+apiVersion: example.com/v1
+kind: WebApp
+metadata:
+  name: nginx-web
+  namespace: default
+
+spec:
+  replicas: 3
+  image: nginx:1.27
+  port: 80
+部署：kubectl apply -f webapp.yaml
+查看：kubectl get webapp
+也可以：kubectl get wa
+查看详细信息：kubectl describe webapp nginx-web
+查看 YAML：kubectl get webapp nginx-web -o yaml
+
+此时你可能会发现一个问题：WebApp 创建成功了，但是并没有自动创建三个 Nginx Pod！为什么？
+因为 CRD 只负责定义资源类型，并不负责执行实际业务操作。这就引出了下一部分。
+
+五、Controller：Kubernetes 控制器机制
+Kubernetes 中有一个非常重要的设计理念：声明式管理 + 控制器持续协调。举个例子。
+你创建 Deployment：
+spec:
+  replicas: 3
+Kubernetes 就会通过 Deployment Controller、ReplicaSet Controller 等控制器，逐步创建并维持三个 Pod。
+
+假设其中一个 Pod 意外退出：
+nginx-1    Running
+nginx-2    Running
+nginx-3    CrashLoopBackOff
+控制器会持续观察实际状态，并尝试恢复到期望状态。
+这就是控制器协调机制。
+
+5.1 控制器工作流程
+核心流程：
+1. 用户创建或修改资源。
+2. API Server 保存资源。
+3. Controller 监听资源变化。
+4. Controller 读取期望状态。
+5. Controller 对比实际状态。
+6. 创建、更新或删除相关资源。
+7. 持续重复上述过程。
+这里最重要的概念叫：Reconciliation Loop（协调循环）。
+
+例如：
+期望状态：3个Nginx Pod
+实际状态：2个Nginx Pod
+控制器发现不一致
+自动创建1个Pod
+最终状态：3个Nginx Pod
+CRD 加上 Controller，就能够实现真正的自定义资源管理。
+
+六、Operator：Kubernetes 自动化运维专家
+现在终于来到本节课最重要的部分。
+Operator 是 Kubernetes 扩展机制中非常重要的一种设计模式。
+它不仅仅是创建资源，还能够理解应用的运行逻辑，并自动执行复杂的运维操作。
+
+6.1 Operator 是什么？
+Operator 可以理解为：CRD + Controller + 应用运维知识。
+例如，我们要管理一个 MySQL 集群。
+普通 Kubernetes 部署 MySQL，可能需要自己创建：
+- StatefulSet
+- Service
+- ConfigMap
+- Secret
+- PVC
+- PersistentVolume
+- 备份任务
+如果数据库出现故障，还需要人工排查。
+而 MySQL Operator 可以把这些操作自动化。
+
+例如用户只需要创建：
+apiVersion: database.example.com/v1
+kind: MySQLCluster
+metadata:
+  name: mysql-prod
+spec:
+  replicas: 3
+  version: "8.4"
+  storage: 20Gi
+
+Operator 就可以根据这个配置自动完成：
+创建 MySQLCluster
+       |
+       v
+MySQL Operator 监听资源
+       |
+       v
+读取用户期望配置
+       |
+       v
+创建 StatefulSet
+       |
+       v
+创建 Service
+       |
+       v
+创建 PVC
+       |
+       v
+启动 MySQL Pod
+       |
+       v
+持续监控集群状态
+       |
+       v
+发生故障时自动协调恢复
+
+这就是 Operator 的核心价值。
+
+6.2 Operator 与 Helm 有什么区别？
+这个问题非常重要，因为我们第17课已经学习了 Helm 4.3.0。
+很多初学者会把 Helm 和 Operator 混淆。
+对比		Helm		Operator
+主要作用		应用安装与管理	应用生命周期自动化管理
+核心机制		Chart 模板	CRD + Controller
+安装应用		支持		支持
+修改配置		更新 values	修改自定义资源
+自动故障处理	不负责应用专属恢复	可以实现
+自动备份		需要其他机制	可以实现
+自动扩缩容	配合 HPA 等	可以实现应用专属逻辑
+复杂数据库管理	通常需要额外工具	非常适合
+
+举个例子：
+使用 Helm 安装 MySQL：
+helm install mysql ./mysql-chart
+使用 Operator 管理 MySQL：
+kubectl apply -f mysql-cluster.yaml
+两者并不冲突。实际上，很多 Operator 本身也可以通过 Helm 安装。
+记住：Helm 更偏向于应用的打包、安装和升级；Operator 更偏向于应用运行期间的自动化管理。
+
+6.3 企业中常见的 Operator
+下面这些都是值得了解的实际项目。
+1. Prometheus Operator
+管理 Prometheus 监控系统，可以通过 CRD 创建监控实例、配置采集目标。
+
+2. CloudNativePG
+PostgreSQL 数据库 Operator，支持数据库集群管理、备份和故障恢复。
+
+3. Strimzi
+Kafka Operator，用于在 Kubernetes 中部署和管理 Kafka 集群。
+
+4. Redis Operator 生态
+用于 Redis 集群部署、配置和生命周期管理。
+
+这些项目背后使用的核心思想，就是 CRD 和 Controller。
+
+七、实战：完善自己的 WebApp 资源
+前面我们只是创建了一个 CRD。现在进一步理解：如何通过 CRD 约束用户提交的数据。
+例如，用户提交：
+spec:
+  replicas: 0
+  image: nginx:1.27
+  port: 80
+我们已经在 CRD 中规定：
+replicas:
+  type: integer
+  minimum: 1
+所以 Kubernetes API Server 会拒绝不符合规则的配置。
+
+7.1 测试非法配置
+创建：vi webapp-error.yaml
+写入：
+apiVersion: example.com/v1
+kind: WebApp
+metadata:
+  name: error-web
+
+spec:
+  replicas: 0
+  image: nginx:1.27
+  port: 80
+
+执行：kubectl apply -f webapp-error.yaml
+预期结果：API Server 拒绝这个资源，因为 replicas 小于 1。
+再测试正确配置：kubectl apply -f webapp.yaml
+正常情况下可以创建成功。
+
+7.2 查看 CRD 的 OpenAPI Schema
+kubectl get crd webapps.example.com -o yaml
+重点观察：
+openAPIV3Schema:
+  type: object
+  properties:
+    spec:
+      type: object
+
+这里定义的是用户提交资源时允许使用的数据结构。
+实际企业项目还会增加：
+- 字段默认值。
+- 字符串长度限制。
+- 数值范围限制。
+- 枚举值限制。
+- CEL 自定义验证规则。
+- Status 状态字段。
+例如，限制版本号只能使用指定版本：
+version:
+  type: string
+  enum:
+    - "8.0"
+    - "8.4"
+
+
+八、Operator 的实际开发工具：Kubebuilder
+如果未来你要自己开发 Kubernetes Operator，推荐了解：Kubebuilder。
+官方项目：Kubebuilder 官方文档：https://book.kubebuilder.io/
+它可以帮助开发人员快速生成：
+- CRD 定义。
+- Go API 类型。
+- Controller 控制器。
+- RBAC 权限规则。
+- Webhook。
+- 部署配置。
+
+8.1 Kubebuilder 开发流程
+典型开发流程：
+创建 Kubebuilder 项目
+        |
+        v
+定义 API 类型
+        |
+        v
+生成 CRD
+        |
+        v
+编写 Controller
+        |
+        v
+实现 Reconcile()
+        |
+        v
+生成部署文件
+        |
+        v
+构建 Operator 镜像
+        |
+        v
+部署到 Kubernetes
+        |
+        v
+创建自定义资源测试
+
+
+8.2 一个 Controller 的核心代码
+Kubebuilder 使用 Go 语言开发。
+Controller 中最重要的函数之一就是：
+Reconcile()。
+简化后的逻辑如下：
+func (r *WebAppReconciler) Reconcile(
+    ctx context.Context,
+    req ctrl.Request,
+) (ctrl.Result, error) {
+
+    // 1. 获取 WebApp 资源
+    var webapp WebApp
+
+    err := r.Get(ctx, req.NamespacedName, &webapp)
+
+    if err != nil {
+        return ctrl.Result{}, client.IgnoreNotFound(err)
+    }
+
+    // 2. 获取期望副本数
+    replicas := webapp.Spec.Replicas
+
+    // 3. 获取镜像
+    image := webapp.Spec.Image
+
+    // 4. 根据 WebApp 创建或更新 Deployment
+    // 这里需要实现 Deployment 的创建、更新逻辑
+
+    // 5. 根据 WebApp 创建或更新 Service
+    // 这里需要实现 Service 的创建、更新逻辑
+
+    return ctrl.Result{}, nil
+}
+
+注意：这是帮助理解控制器逻辑的简化代码，并不是可以直接编译部署的完整 Operator。
+
+真正的 Controller 还需要处理：
+- Deployment 是否存在。
+- Deployment 副本数是否正确。
+- 镜像是否发生变化。
+- Service 是否存在。
+- 资源所有权关系。
+- 错误重试。
+- Status 更新。
+例如，当用户把：
+replicas: 3
+修改为：
+replicas: 5
+Controller 就会发现期望状态发生变化，然后更新 Deployment。
+这就是 Operator 的工作方式。
+
+九、Kubernetes 其他扩展机制
+除了 CRD 和 Operator，Kubernetes 还有一些重要的扩展机制。
+9.1 Admission Webhook：准入控制扩展
+用户创建 Pod 时，API Server 不会直接保存所有请求。中间还有一个准入控制流程。
+Webhook 主要分两种：
+类型			作用
+Mutating Webhook		修改用户提交的资源
+Validating Webhook	检查资源是否合法
+
+例如：创建 Pod 时，自动注入一个 Sidecar 容器。
+或者：禁止用户创建没有资源限制的 Pod。
+这些都可以通过 Admission Webhook 实现。
+
+9.2 API Aggregation：API 聚合扩展
+Kubernetes 还支持通过 API Aggregation 扩展 API。
+例如：kubectl get apiservices
+可以查看 APIService 资源。
+API Aggregation 允许将额外的 API 服务接入 Kubernetes API Server。
+
+它与 CRD 不同：
+- CRD：扩展 Kubernetes 的资源类型。
+- API Aggregation：接入独立实现的 API 服务。
+初学阶段重点掌握 CRD 和 Operator 即可。
+
+十、Operator 与 CRD 的关系总结
+这一部分一定要记住，面试和实际工作都经常涉及。
+Kubernetes 扩展体系
+
+	Kubernetes API Server
+	统一接收和管理资源请求
+		↓
+CRD			Webhook
+定义新资源类型		验证或修改请求
+		↓
+	CR（自定义资源实例）
+	用户声明期望状态
+		↓
+	Controller
+	持续协调实际状态与期望状态
+		↓
+	Deployment / StatefulSet / Service / PVC
+	最终创建和管理实际运行资源
+
+四个概念：
+名称	核心作用
+CRD	定义一种新资源
+CR	创建一个资源实例
+Controller负责协调资源状态
+Operator	面向特定应用的自动化运维控制器模式
+
+
+十一、本节课实验验收
+现在在你的 Rocky Linux 9.8 三节点 Kubernetes 集群上，执行下面的命令。
+第一项：检查 CRD 是否存在
+kubectl get crd
+第二项：检查自定义资源类型
+kubectl api-resources | grep webapp
+第三项：检查 WebApp 实例
+kubectl get webapp -A
+第四项：检查资源详细信息
+kubectl describe webapp nginx-web
+第五项：检查资源 YAML
+kubectl get webapp nginx-web -o yaml
+第六项：检查 Kubernetes API 版本
+kubectl api-versions | grep example.com
+预期能够看到：
+example.com/v1
+
+清理实验资源
+本次实验创建的资源都可以删除：kubectl delete webapp nginx-web
+然后删除 CRD：kubectl delete crd webapps.example.com
+注意：删除 CRD 会同时删除该 CRD 管理的所有自定义资源实例，实际生产环境操作前一定要确认。
+
+十二、本节课知识考核
+可以先自己回答下面五道题，检验是否真正理解。
+第27课知识测试
+0/5 已作答
+1. CRD 的主要作用是什么？
+自动创建 Pod
+定义新的 Kubernetes 资源类型
+管理容器网络
+
+2. 创建 CRD 后，为什么没有自动创建 Deployment？
+因为没有安装 kubelet
+因为 CRD 只定义资源，没有 Controller 执行业务逻辑
+因为必须使用 Helm
+
+3. CRD 和 CR 的关系是什么？
+CRD 是资源定义，CR 是资源实例
+CRD 是 Pod，CR 是 Node
+两者完全相同
+
+4. Operator 的核心组成是什么？
+Pod + Service
+Helm + Docker
+CRD + Controller + 应用运维逻辑
+
+5. Mutating Webhook 的主要作用是什么？
+修改请求中的资源对象
+自动扩展 Node
+创建 PV

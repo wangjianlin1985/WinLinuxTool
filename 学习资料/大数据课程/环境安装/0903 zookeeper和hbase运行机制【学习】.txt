@@ -1,0 +1,214 @@
+这部分非常值得理解。ZooKeeper 和 HBase 经常一起部署，但它们承担的工作完全不同。
+你可以先记住一句话：ZooKeeper 负责协调和管理集群，HBase 负责存储和管理海量数据。
+
+ZooKeeper 本身不存储 HBase 的业务数据，也不负责执行数据读写。它主要负责让 HBase 的各个进程知道：
+- 谁是 HMaster？
+- 哪个 RegionServer 正常运行？
+- 当前哪个 HMaster 是主节点？
+- 某个 Region 应该由哪个 RegionServer 管理？
+- 某个服务是否发生故障，需要重新选举或接管？
+下面结合你现在的 A 方案：Rocky Linux 9.8 单机伪分布式环境，讲清楚整个运行逻辑。
+一、先认识 ZooKeeper 和 HBase 的进程
+HBase 主要涉及三个核心进程：
+进程		作用
+ZooKeeper	集群协调、状态管理、主节点选举
+HMaster		HBase 集群管理、Region 分配、故障恢复
+HRegionServer	实际处理数据读写请求
+
+另外还有：
+进程	作用
+HDFS NameNode	管理 HDFS 文件系统元数据
+HDFS DataNode	实际存储 HBase 数据文件
+
+注意：HBase 的数据最终存储在 HDFS 上，而不是 ZooKeeper 上。
+
+二、ZooKeeper 到底做了什么？
+可以把 ZooKeeper 理解成一个集群的协调中心。
+举个例子：假设你的 HBase 集群有：
+- 1 个 HMaster
+- 3 个 RegionServer
+- 1 个 ZooKeeper
+ZooKeeper 会维护一些集群状态信息。
+
+1. 记录 HMaster 的位置
+HBase 启动时，HMaster 会连接 ZooKeeper。
+HMaster 会在 ZooKeeper 中创建临时节点，表明自己是当前活动的 Master。
+例如：
+/hbase
+    /master
+    /meta-region-server
+    /rs
+
+这里是逻辑示意，实际节点结构和名称会随 HBase 版本有所不同。
+当另一个 HMaster 启动时，它会检查当前是否已经有活动 Master。
+如果有，就不会同时成为活动 Master，而是等待接管机会。
+
+2. 监控 RegionServer 是否存活
+假设有三个 RegionServer：
+RegionServer1
+RegionServer2
+RegionServer3
+它们启动后会向 ZooKeeper 注册自己的临时节点。
+ZooKeeper 可以通过会话（Session）判断这些节点是否仍然有效。
+
+假设：
+RegionServer1：正常
+RegionServer2：正常
+RegionServer3：异常退出
+
+RegionServer3 与 ZooKeeper 的会话失效后，其临时节点会被删除。
+HMaster 通过监视机制发现这个变化，然后开始处理 RegionServer 故障。
+注意：ZooKeeper 负责发现和通知，不负责重新分配 Region。真正的故障处理由 HMaster 完成。
+
+3. 协调 HMaster 主节点选举
+如果部署两个 HMaster：
+HMaster1
+HMaster2
+启动后：
+HMaster1：Active Master
+HMaster2：Backup Master
+
+如果 HMaster1 崩溃：
+ZooKeeper 发现原 Master 会话失效
+              |
+              v
+       HMaster2 竞争成为主节点
+              |
+              v
+       HMaster2 接管集群管理
+这样可以避免两个 HMaster 同时管理集群。
+注意：ZooKeeper 提供选举协调机制，具体选举流程由 HBase 实现。
+
+三、HMaster 和 RegionServer 是怎么配合的？
+这是理解 HBase 的关键。
+假设 HBase 有一个表：
+student
+表中数据量很大，HBase 会把表拆分成多个 Region。
+例如：
+student 表
+Region 1
+学号 1～1000
+
+Region 2
+学号 1001～2000
+
+Region 3
+学号 2001～3000
+
+Region 分配
+RS1
+RS2
+RS3
+
+三个 Region 分别由三个 RegionServer 管理。
+
+这里有两个关键角色。
+1. HMaster：管理者
+HMaster 不负责直接处理客户端的大部分数据读写请求。
+它主要负责：
+- 管理 HBase 表的创建、删除和修改。
+- 管理 Region 的分配。
+- 监控 RegionServer。
+- RegionServer 故障后的 Region 重新分配。
+- 管理集群负载均衡。
+
+2. HRegionServer：数据处理者
+RegionServer 才是实际干活的进程。
+它负责：
+- 接收客户端的数据读写请求。
+- 管理自己负责的 Region。
+- 处理数据写入和查询。
+- 管理 MemStore。
+- 将数据持久化为 HFile。
+- 维护 WAL（预写日志）。
+
+四、实际写入一条数据，整个系统怎么运行？
+假设你执行：
+put 'student', '1001', 'info:name', '张三'
+
+整个过程大致如下：
+HBase 客户端
+执行 put 写入请求
+↓
+ZooKeeper
+帮助客户端发现 META Region 的位置
+↓
+hbase:meta
+查询 student 表对应 Region 的位置
+↓
+HRegionServer
+客户端直接向目标 RegionServer 写入数据
+↓
+WAL + MemStore
+先记录 WAL，再写入内存 MemStore
+↓
+HDFS
+后续 Flush 形成 HFile，持久化到 HDFS
+
+这里有一个特别重要的知识点：
+ZooKeeper 只参与服务发现和协调，不会代理每一次数据读写。
+客户端找到对应的 RegionServer 后，后续通常直接与 RegionServer 通信，不需要每次都经过 ZooKeeper 或 HMaster。
+
+五、如果 RegionServer 崩溃了怎么办？
+假设：
+HMaster：正常
+RegionServer1：正常
+RegionServer2：崩溃
+RegionServer3：正常
+ZooKeeper：正常
+
+处理流程：
+RegionServer2 崩溃
+
+ZooKeeper
+检测到 RegionServer2 的会话失效
+HMaster
+发现故障，执行恢复和 Region 重新分配
+RegionServer1 / RegionServer3
+接管原来由 RegionServer2 管理的 Region
+数据不会因为 RegionServer 崩溃就直接丢失，因为 HBase 有 WAL 和 HDFS 持久化机制，故障恢复时还会进行 WAL 分裂和回放等操作。
+
+六、你当前 A 方案启动后，实际会有多少进程？
+你现在采用的是一台 Rocky Linux 9.8 单机伪分布式环境。
+正常情况下，核心进程如下：
+组件	进程			数量
+ZooKeeper	QuorumPeerMain	1
+HBase	HMaster			1
+HBase	HRegionServer		1
+Hadoop	NameNode		1
+Hadoop	DataNode		1
+Hadoop	SecondaryNameNode	1
+注意：这里假设 ZooKeeper 独立运行，HBase 不再额外启动内置 ZooKeeper。
+
+启动顺序建议：
+# 1. 启动 ZooKeeper
+zkServer.sh start
+
+# 2. 启动 HDFS
+start-dfs.sh
+
+# 3. 启动 HBase
+start-hbase.sh
+
+查看进程：
+jps
+
+
+七、最后总结：ZooKeeper 到底有什么用？
+对比		ZooKeeper	HMaster		RegionServer
+主节点选举协调	是		参与		否
+服务注册与发现	是		注册/查询		注册/查询
+监控节点会话	是		监控处理		维持会话
+Region 分配	否		是		接收分配
+数据读写		否		通常不处理	是
+HDFS 数据存储	否		否		是，借助 HDFS
+
+你一定要记住这三个角色：
+1. ZooKeeper：协调员，负责协调集群各个进程。
+2. HMaster：管理员，负责管理 HBase 集群。
+3. RegionServer：执行者，负责实际的数据读写。
+还有一个容易忽略的知识点：你目前 A 方案只有一个 ZooKeeper，适合学习和测试，但不具备 ZooKeeper 自身的高可用能力。
+真正的 B 方案三节点集群，可以进一步部署 ZooKeeper 三节点 Quorum，通常采用 3 个节点进行多数派选举。
+
+下一步建议： 先把这套架构理解透，再部署 ZooKeeper 和 HBase。
+后面我们可以通过人为停止 RegionServer，观察 ZooKeeper 节点变化、HMaster 故障处理以及 Region 恢复过程

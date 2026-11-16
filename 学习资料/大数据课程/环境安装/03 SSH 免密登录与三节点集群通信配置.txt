@@ -1,0 +1,455 @@
+这一课正式开始搭建 Hadoop 大数据集群的基础通信环境。
+上一课我们已经确定了 Hadoop、Hive、Spark、HBase、Kafka、Flink 的技术选型和软件版本。
+这一课先不安装大数据组件，而是把三台 Rocky Linux 9.8 虚拟机配置成一个能够互相通信、支持远程管理的 Linux 集群。
+
+本课完成后，你将能够：
+1. 三台 Linux 主机通过主机名互相访问。
+2. 配置统一的大数据管理用户 dsj_admin。
+3. 配置 SSH 公钥认证，实现免密码登录。
+4. 实现 master 远程管理 worker1、worker2。
+5. 验证三台机器之间的网络和 SSH 通信。
+6. 为后续 Hadoop、HBase、Spark 等集群组件做好准备。
+
+一、三节点集群规划
+按照我们之前确定的 IP 地址规划，三台虚拟机如下。
+大数据集群拓扑
+master
+192.168.79.10
+管理节点
+2 核 CPU · 4 GB 内存 · 60 GB 硬盘
+
+worker1
+192.168.79.11
+2 核 · 4 GB · 60 GB
+
+worker2
+192.168.79.12
+2 核 · 4 GB · 60 GB
+
+192.168.79.0/24 集群网络
+
+1.1 虚拟机资源是否够用？
+你的配置：
+资源	每台虚拟机	三台合计
+CPU	2 核	6 核
+内存	4 GB	12 GB
+硬盘	60 GB	180 GB
+这套配置可以用于学习和搭建小型三节点实验集群。
+
+但需要注意：
+- Hadoop HDFS、YARN 可以正常学习。
+- Hive 可以进行基础 SQL 实验。
+- Spark 可以进行小规模计算。
+- HBase、Kafka、Flink 可以进行基础部署和功能测试。
+- 不适合同时启动所有组件并执行大型任务。
+后续我们会根据组件的启动情况合理分配内存。
+
+二、配置三台机器的主机名
+主机名是 Linux 集群通信的重要基础。
+我们不希望每次远程连接都输入 IP 地址，而是直接使用：
+ssh worker1
+ssh worker2
+
+三台机器分别执行：
+hostname
+预期结果：
+master
+worker1
+worker2
+
+
+三、配置三节点 hosts 文件
+这是集群通信中非常重要的一步。
+Linux 通过 /etc/hosts 可以实现 IP 地址和主机名的本地映射。
+3.1 三台机器统一配置
+在 master、worker1、worker2 三台机器上，分别执行：
+vi /etc/hosts
+在文件末尾添加：
+# Hadoop 大数据集群节点配置
+192.168.79.10 master
+192.168.79.11 worker1
+192.168.79.12 worker2
+保存退出。
+注意：三台机器都必须配置完全相同的内容。
+
+3.2 验证主机名解析
+在三台机器上分别执行：
+getent hosts master
+getent hosts worker1
+getent hosts worker2
+预期结果：
+192.168.79.10 master
+192.168.79.11 worker1
+192.168.79.12 worker2
+
+
+3.3 测试网络连通性
+在 master 上执行：
+ping -c 4 worker1
+ping -c 4 worker2
+也可以测试 IP：
+ping -c 4 192.168.79.11
+ping -c 4 192.168.79.12
+如果能够收到响应，说明基本网络通信正常。
+如果 ping 不通，先检查 IP、网卡、路由和防火墙，不要急着配置 SSH。
+
+四、创建大数据专用用户 dsj_admin
+这里有一个非常重要的知识点。
+你之前提到同行的虚拟机需要切换到 dsj_admin 用户才能启动 Hadoop，甚至 root 用户都不能直接启动。
+这其实是大数据集群常见的用户权限管理方式。
+
+4.1 为什么不使用 root 启动 Hadoop？
+主要原因：
+1. 安全性：避免大数据组件拥有不必要的系统最高权限。
+2. 权限隔离：HDFS 数据、日志、程序文件都归专用用户管理。
+3. 集群统一：三台机器使用同一个用户，便于 SSH 远程管理。
+4. 软件兼容：部分 Hadoop 组件会主动限制 root 用户启动。
+我们采用下面的用户规划：
+用户		用途
+root		Linux 系统管理、安装软件
+dsj_admin	Hadoop 等大数据组件的运行和管理
+
+4.2 三台机器创建用户
+在三台机器上分别以 root 执行：
+useradd -m -s /bin/bash dsj_admin
+设置密码：
+passwd dsj_admin
+三台机器都创建同名用户。
+密码可以相同，也可以不同。为了后续实验方便，你可以统一设置。
+验证：
+id dsj_admin
+预期类似：
+uid=1001(ds j_admin) gid=1001(ds j_admin) groups=1001(ds j_admin)
+实际 UID/GID 以你的系统为准。
+注意： 三台机器的 UID/GID 最好保持一致。因为后续会涉及 HDFS、共享文件和用户权限管理。可以用 id dsj_admin 检查。
+
+4.3 切换到大数据用户
+在 master 上执行：
+su - dsj_admin
+查看当前用户：
+whoami
+结果：
+dsj_admin
+后续 Hadoop、Hive、Spark 等组件的普通运行操作，我们原则上都使用这个用户。
+
+五、检查和安装 SSH 服务
+SSH 是 Linux 集群远程管理的基础。
+例如 Hadoop 的启动脚本，在 master 上执行：
+start-dfs.sh
+就可能需要通过 SSH 登录 worker1 和 worker2，分别启动 DataNode。
+如果没有 SSH 免密登录，就会不断要求输入密码。
+
+5.1 三台机器安装 SSH【已装可跳过】
+在三台机器上分别以 root 执行：
+dnf install -y openssh-server openssh-clients
+
+5.2 启动 SSH 服务
+三台机器分别执行：
+systemctl enable --now sshd
+查看服务状态：
+systemctl status sshd
+看到：Active: active (running)
+说明 SSH 服务已经正常运行。
+
+5.3 检查 SSH 监听端口
+ss -tlnp | grep ':22'
+正常情况下可以看到：
+LISTEN 0 128 0.0.0.0:22
+说明 SSH 服务正在监听 22 端口。
+
+5.4 检查防火墙
+如果 firewalld 正在运行，需要开放 SSH：
+firewall-cmd --permanent --add-service=ssh
+firewall-cmd --reload
+查看：
+firewall-cmd --list-services
+如果 firewalld 已经关闭，这一步可以跳过。
+
+六、配置 SSH 公钥免密登录
+本课核心操作
+这是本课最重要的内容。
+6.1 先理解 SSH 免密登录原理
+SSH 免密登录采用的是非对称加密认证。
+它需要一对密钥：
+- 私钥：保存在客户端，不能泄露。
+- 公钥：放在服务器上，用于验证客户端身份。
+
+例如：
+master 想登录 worker1：
+1. master 生成公钥和私钥。
+2. master 将公钥复制到 worker1。
+3. worker1 将公钥保存到 authorized_keys。
+4. master 发起 SSH 登录。
+5. worker1 验证 master 是否拥有对应私钥。
+6. 验证通过，直接登录，不需要输入密码。
+注意：免密登录不是不需要认证，而是使用密钥代替密码认证。
+
+6.2 在 master 生成 SSH 密钥
+先确保当前用户是 dsj_admin：
+whoami
+如果不是请输入命令切换：
+su - dsj_admin
+
+生成密钥：
+ssh-keygen -t ed25519 -C "dsj_admin@master"
+执行后会出现：
+Enter file in which to save the key
+直接按回车。
+接下来：
+Enter passphrase
+继续按回车。
+最后再按回车确认。
+这样就生成了一对密钥。
+
+6.3 查看生成的密钥文件
+执行：
+ls -l ~/.ssh/
+正常情况下：
+id_ed25519
+id_ed25519.pub
+两个文件的区别：
+文件	作用
+id_ed25519	私钥，必须保密
+id_ed25519.pub	公钥，可以复制到其他节点
+
+查看公钥：
+cat ~/.ssh/id_ed25519.pub
+注意：不要把私钥 id_ed25519 复制到 worker 节点。
+
+6.4 设置 SSH 目录权限
+执行：
+chmod 700 ~/.ssh
+私钥权限：
+chmod 600 ~/.ssh/id_ed25519
+
+6.5 将 master 公钥复制到 worker1
+执行：
+ssh-copy-id dsj_admin@worker1
+第一次执行会询问：
+Are you sure you want to continue connecting?
+输入：
+yes
+然后输入 worker1 上 dsj_admin 用户的密码。
+
+成功后一般会显示：
+Number of key(s) added: 1
+
+6.6 将 master 公钥复制到 worker2
+执行：
+ssh-copy-id dsj_admin@worker2
+同样输入：
+yes
+然后输入 worker2 上 dsj_admin 用户的密码。
+
+6.7 配置 master 登录自己也免密
+执行：
+ssh-copy-id dsj_admin@master
+这样 master 登录自己也不需要输入密码。
+为什么要配置自己？
+因为 Hadoop 的启动脚本也可能通过 SSH 登录 NameNode 所在节点，启动相关进程。
+
+七、验证 SSH 免密登录
+现在我们进行实际测试。
+确保当前终端仍然是 master 上的 dsj_admin 用户。
+7.1 master 登录 worker1
+ssh dsj_admin@worker1
+如果成功，不需要输入密码就能进入 worker1。
+执行：hostname
+预期：worker1
+退出：exit
+
+7.2 master 登录 worker2
+ssh dsj_admin@worker2
+执行：hostname
+预期：worker2
+退出：exit
+
+7.3 master 登录自己
+ssh dsj_admin@master
+执行：hostname
+预期：master
+
+7.4 一次性测试三个节点
+在 master 上执行：
+for host in master worker1 worker2
+do
+    echo "========== $host =========="
+    ssh -o BatchMode=yes dsj_admin@$host hostname
+done
+
+预期结果：
+========== master ==========
+master
+========== worker1 ==========
+worker1
+========== worker2 ==========
+worker2
+关键验证通过
+如果出现上述结果，说明 master 已经能够通过 SSH 免密管理另外两台机器。
+
+八、进一步理解：需要三台机器互相免密吗？
+这个问题很重要。
+
+目前我们配置的是：
+master 发起 SSH 连接
+已配置master
+dsj_admin
+免密登录work1和work2 
+这对于我们后续的 Hadoop 集群启动和停止操作已经足够。
+
+例如：
+start-dfs.sh
+Hadoop 会由 master 通过 SSH 远程启动 worker 上的 DataNode。
+
+stop-dfs.sh
+则会通过 SSH 远程停止相应进程。
+
+需要注意：
+不需要为了 Hadoop 专门配置 worker1、worker2 之间的 SSH 免密登录。
+只有当你有特殊的自动化运维需求时，才考虑配置三台机器全互相免密。
+
+九、测试三节点集群通信
+我们再进行一次综合检查。
+9.1 检查三台机器的网络信息
+在 master 上执行：
+for host in master worker1 worker2
+do
+    echo "========== $host =========="
+    ssh dsj_admin@$host "hostname; hostname -I"
+done
+
+预期：
+========== master ==========
+master
+192.168.79.10
+
+========== worker1 ==========
+worker1
+192.168.79.11
+
+========== worker2 ==========
+worker2
+192.168.79.12
+
+
+9.2 检查三台机器的 CPU 和内存
+for host in master worker1 worker2
+do
+    echo "========== $host =========="
+    ssh dsj_admin@$host "nproc; free -h"
+done
+
+可以检查：
+- nproc：CPU 核心数量。
+- free -h：内存使用情况。
+每台机器应该显示 2 个 CPU 核心，约 4 GB 内存。
+
+9.3 检查三台机器的磁盘
+for host in master worker1 worker2
+do
+    echo "========== $host =========="
+    ssh dsj_admin@$host "df -h /"
+done
+
+查看根分区剩余空间。
+9.4 测试 SCP 文件传输
+SSH 不仅能远程登录，还能传输文件。
+在 master 上执行：
+echo "Hello Hadoop Cluster" > test.txt
+将文件复制到 worker1：
+scp test.txt dsj_admin@worker1:/home/dsj_admin/
+复制到 worker2：
+scp test.txt dsj_admin@worker2:/home/dsj_admin/
+检查 worker1：
+ssh dsj_admin@worker1 "cat /home/dsj_admin/test.txt"
+预期：
+Hello Hadoop Cluster
+检查 worker2：
+ssh dsj_admin@worker2 "cat /home/dsj_admin/test.txt"
+预期：
+Hello Hadoop Cluster
+这说明 SSH 登录和文件传输均正常。
+
+十、为后续 Hadoop 集群做准备
+现在我们提前了解一下 Hadoop 会用到的配置。
+在 Hadoop 安装目录中，有一个非常重要的文件：
+$HADOOP_HOME/etc/hadoop/workers
+这个文件用于指定 Hadoop 集群的工作节点。
+
+后续我们会配置成：
+worker1
+worker2
+
+注意：这里不需要填写 master，因为 master 通常承担 NameNode、ResourceManager 等管理角色，
+是否同时承担 DataNode、NodeManager 可以根据集群规划决定。
+Hadoop 的启动脚本会根据这个文件，通过 SSH 远程管理工作节点。
+
+这就是为什么我们现在必须提前做好：
+- 主机名解析。
+- SSH 服务。
+- SSH 免密认证。
+- 统一运行用户。
+它们是 Hadoop 集群正常启动的基础。
+
+十一、常见问题排查
+问题			可能原因		解决方法
+Could not resolve hostname	hosts 配置错误	检查 /etc/hosts
+Connection refused		SSH 服务未启动	systemctl start sshd
+Permission denied		密钥或用户权限错误	检查 authorized_keys
+Permission denied (publickey,password)	用户或认证配置错误	检查 SSH 用户及认证方式
+每次登录都需要密码		公钥没有复制成功	重新执行 ssh-copy-id
+Host key verification failed	主机指纹发生变化	核对目标主机后处理 known_hosts
+SCP 无法传输文件		目录权限不足	检查目标目录权限
+
+如果出现免密登录失败，可以重点检查：
+ls -ld ~/.ssh
+应该是：
+drwx------ 
+
+检查：
+ls -l ~/.ssh/authorized_keys
+应该是：
+-rw-------
+
+修复权限：
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+ 
+十三、本课安装记录总结
+建议你把下面这段记录保存下来，后续排查 Hadoop 集群时会经常用到。
+课程：第2课 SSH免密登录与三节点集群通信配置
+
+操作系统：Rocky Linux 9.8
+SSH服务：OpenSSH
+SSH端口：22
+密钥算法：Ed25519
+
+节点规划：
+master   192.168.79.10
+worker1  192.168.79.11
+worker2  192.168.79.12
+
+集群管理用户：
+dsj_admin
+
+SSH免密关系：
+master -> master
+master -> worker1
+master -> worker2
+
+主机名解析文件：
+/etc/hosts
+
+SSH公钥文件：
+~/.ssh/id_ed25519.pub
+
+SSH私钥文件：
+~/.ssh/id_ed25519
+
+SSH授权文件：
+~/.ssh/authorized_keys
+
+文件传输工具：
+scp
+
+纠正一个小细节： 用户信息的正确显示格式是 uid=1001(dsj_admin)，具体 UID 以你的机器为准。

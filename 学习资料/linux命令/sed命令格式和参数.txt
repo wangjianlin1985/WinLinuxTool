@@ -1,0 +1,93 @@
+基本格式：
+sed [参数] '地址范围/操作命令' 文件名
+
+sed 是 Linux 文本流编辑器，常用于查找、替换、删除、插入、修改文本内容，默认不修改原文件。
+1. 常用参数速查
+参数	简要说明
+-n	静默模式，只输出指定内容
+-e	执行多条 sed 命令
+-f	从脚本文件读取 sed 命令
+-i	直接修改原文件
+-i.bak	修改原文件，并创建 .bak 备份
+-r	使用扩展正则表达式（GNU sed）
+-E	使用扩展正则表达式
+-s	将多个文件分别处理
+-z	使用 NUL 字符作为行分隔符
+
+2. 常用操作命令
+命令	简要说明
+s/旧/新/	替换每行第一个匹配项
+s/旧/新/g	替换每行所有匹配项
+s/旧/新/gi	全局替换并忽略大小写
+d	删除指定行
+p	打印指定行
+a	在指定行后追加内容
+i	在指定行前插入内容
+c	将指定行替换为新内容
+=	输出行号
+q	满足条件后退出
+y/源/目标/	按字符逐个转换
+r 文件	读取另一个文件的内容并插入
+w 文件	将匹配内容写入文件
+
+3. 常用操作示例
+假设测试文件：
+/root/linux-text-lab/sed/test.txt
+
+
+简要名称		命令示例				命令说明
+替换字符串	sed 's/old/new/' test.txt		替换每行第一个old
+全局替换		sed 's/old/new/g' test.txt		替换每行所有old
+忽略大小写	sed 's/error/ERROR/gi' test.txt	忽略大小写替换
+修改原文件	sed -i 's/old/new/g' test.txt		直接修改文件
+备份后修改	sed -i.bak 's/old/new/g' test.txt	修改前备份原文件
+删除指定行	sed '3d' test.txt			删除第3行输出
+删除行范围	sed '2,5d' test.txt			删除第2至5行输出
+删除空行		sed '/^$/d' test.txt			删除所有空行
+删除注释		sed '/^#/d' test.txt			删除以#开头的行
+打印指定行	sed -n '3p' test.txt			只输出第3行
+打印行范围	sed -n '2,5p' test.txt		输出第2至5行
+匹配关键字	sed -n '/error/p' test.txt		输出包含error的行
+行尾追加		sed '2a\hello' test.txt		在第2行后追加hello
+行首插入		sed '2i\hello' test.txt		在第2行前插入hello
+整行替换		sed '2c\hello' test.txt		将第2行替换为hello
+显示行号		sed -n '=' test.txt			输出每行行号
+提取指定内容	sed -n 's/.*name=//p' test.txt		提取name=后面的内容
+删除行首空格	sed 's/^[[:space:]]*//' test.txt		删除行首空格和制表符
+删除行尾空格	sed 's/[[:space:]]*$//' test.txt		删除行尾空格和制表符
+
+4. 地址范围与正则表达式
+写法	简要说明
+1	第1行
+$	最后一行
+2,5	第2至5行
+3,$	第3行到最后一行
+/error/	匹配包含error的行
+/^root/	匹配root开头的行
+/bash$/	匹配bash结尾的行
+/error/,/warning/	从匹配error的行到匹配warning的行
+1~2	从第1行开始，每隔2行选择一行
+2~3	从第2行开始，每隔3行选择一行
+
+5. 多命令组合
+使用 -e 执行多条命令：sed -e 's/old/new/g' -e '/^#/d' test.txt
+也可以使用分号：sed 's/old/new/g; /^#/d' test.txt
+通过管道处理其他命令的输出：cat test.txt | sed 's/old/new/g'
+
+6. 高频参数与命令记忆
+ 记忆口诀：
+ s 替换
+ d 删除
+ p 打印
+ a 后追加
+ i 前插入
+ c 整行替换
+ -n 控制输出
+ -i 修改文件
+ -e 多命令执行
+
+特别注意：
+ sed 's/old/new/g' file：只显示修改结果，不修改原文件。
+ sed -i 's/old/new/g' file：直接修改原文件。
+ sed -n '2,5p' file：只打印指定行。
+ sed '2,5d' file：删除指定行，但默认不修改原文件；配合 -i 才会真正删除。

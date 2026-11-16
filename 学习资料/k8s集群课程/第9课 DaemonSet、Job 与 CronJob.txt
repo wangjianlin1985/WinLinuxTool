@@ -1,0 +1,477 @@
+ 这一课我们学习 Kubernetes 中另外三种非常重要的工作负载控制器。
+前面第8课学习了 StatefulSet 与有状态应用，现在我们已经认识了 Kubernetes 中大部分常见的工作负载。
+今天重点理解三个问题：
+1. DaemonSet： 如何让每个 Kubernetes 节点都运行一个 Pod？
+2. Job： 如何让 Pod 执行一次任务，完成后自动结束？
+3. CronJob： 如何让 Kubernetes 定时执行任务，例如每天凌晨备份数据库？
+
+一、先理解三种控制器的区别
+Kubernetes 中不同的控制器，负责不同类型的任务。
+控制器		主要用途	典型场景
+Deployment	管理无状态应用		Nginx、Web 服务
+StatefulSet	管理有状态应用		MySQL、Redis
+DaemonSet	每个节点运行一个 Pod	日志采集、监控代理
+Job		执行一次性任务		数据备份、数据处理
+CronJob		定时执行任务		定时备份、定时清理
+
+可以用下面的方式记忆：
+- Deployment：我要运行几个 Pod。
+- StatefulSet：我要运行几个有固定身份和存储的 Pod。
+- DaemonSet：每台机器都要运行一个 Pod。
+- Job：我要把一件事情做完。
+- CronJob：我要按照时间周期反复做一件事情。
+
+三种控制器的工作方式
+DaemonSet：Master，Node1，Node2 每个符合条件的节点自动运行一个 Pod。
+Job：执行任务 -> 完成退出
+CronJob：08:00启动任务，12:00启动任务，18:00启动任务
+根据 Cron 时间表达式，定时创建 Job。
+
+二、DaemonSet：每个节点运行一个 Pod
+1. DaemonSet 是什么？
+DaemonSet 是 Kubernetes 的一种工作负载控制器。
+
+它的核心作用：确保集群中的每个符合条件的 Node 节点，都运行一个指定的 Pod。
+
+假设我们的 Kubernetes 集群有：
+- k8s-master
+- k8s-node1
+- k8s-node2
+创建一个 DaemonSet 后，默认情况下它会在符合调度条件的三个节点上各运行一个 Pod。
+如果后面又加入 k8s-node3：DaemonSet 会自动在新节点上创建一个 Pod。
+如果删除 k8s-node2：对应的 Pod 也会随节点消失。
+这就是 DaemonSet 最重要的特点：跟随节点数量自动调整 Pod 分布。
+
+注意：DaemonSet 并不保证一定在所有节点运行。节点选择器、污点容忍、调度约束等条件都可能影响它的运行范围。
+
+2. DaemonSet 有什么用途？
+实际生产环境中经常用它部署以下程序：
+应用		作用
+Fluent Bit		收集节点和容器日志
+Prometheus Node Exporter	采集节点硬件指标
+Calico		Kubernetes 网络组件
+Filebeat		日志采集
+监控 Agent	监控每台服务器
+
+例如：
+假设有10台 Linux 服务器，每台服务器都需要安装一个日志采集程序。
+如果使用 Deployment，需要自己考虑 Pod 如何分布到每台机器。
+使用 DaemonSet 就简单得多：只需要创建一个 DaemonSet，Kubernetes 就会自动确保符合条件的节点都有一个日志采集 Pod。
+
+3. 实战：创建 DaemonSet
+我们使用 Nginx 作为实验对象。在 master 上执行：
+cat > /root/nginx-daemonset.yaml <<'EOF'
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nginx-daemon
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: nginx-daemon
+  template:
+    metadata:
+      labels:
+        app: nginx-daemon
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+EOF
+
+应用配置：kubectl apply -f /root/nginx-daemonset.yaml
+查看 DaemonSet：kubectl get daemonset
+也可以使用缩写：kubectl get ds
+查看 Pod：kubectl get pods -o wide
+
+你应该能够看到类似这样的结果：
+Pod	所在节点
+nginx-daemon-xxxxx	k8s-master
+nginx-daemon-yyyyy	k8s-node1
+nginx-daemon-zzzzz	k8s-node2
+实际 Pod 名称和分布以你的集群输出为准。
+
+4. 查看 DaemonSet 详细信息：kubectl describe ds nginx-daemon
+
+重点观察：
+Desired Number of Nodes Scheduled
+Current Number of Nodes Scheduled
+Number of Nodes Scheduled with Up-to-date Pods
+Number of Nodes Scheduled with Available Pods
+
+这几个字段非常重要：
+- Desired：期望运行的节点数量。
+- Current：当前已经调度的节点数量。
+- Up-to-date：使用最新配置的 Pod 数量。
+- Available：当前可用的 Pod 数量。
+如果 Desired 为3，Available 为3，说明三个符合条件的节点都有可用 Pod。
+
+5. 删除 DaemonSet：kubectl delete -f /root/nginx-daemonset.yaml
+或者：kubectl delete ds nginx-daemon
+删除 DaemonSet 后，它管理的 Pod 也会被删除。
+
+三、Job：一次性任务控制器
+1. Job 是什么？Job 主要用于执行一次性任务。
+例如：
+- 数据库备份。
+- 数据库数据导入。
+- 执行 SQL 脚本。
+- 批量处理文件。
+- 执行一次 Shell 脚本。
+- 初始化系统数据。
+
+Job 与 Deployment 最大的区别：
+对比		Deployment	Job
+主要用途		长期运行应用	执行一次性任务
+Pod 结束后	通常自动重新创建	成功完成后不再重启
+是否追求持续运行	是		否
+典型应用		Nginx、Java	备份、脚本执行
+
+举个例子：
+Deployment 运行 Nginx：
+只要 Nginx 停止了，Kubernetes 就会尝试重新创建 Pod。
+
+Job 执行备份：
+tar -czf /backup/data.tar.gz /data
+备份完成后，Job 就算成功，不需要一直运行。
+
+2. 实战：创建一个 Job
+我们创建一个简单的任务，让容器执行命令，然后退出。创建 YAML：
+cat > /root/job.yaml <<'EOF'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-job
+spec:
+  template:
+    spec:
+      containers:
+      - name: job-container
+        image: busybox:1.36
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Job Start"
+          date
+          echo "Hello Kubernetes"
+          sleep 10
+          echo "Job Finished"
+      restartPolicy: Never
+EOF
+
+应用：kubectl apply -f /root/job.yaml
+查看 Job：kubectl get jobs
+查看 Pod：kubectl get pods -o wide
+
+刚创建时可能看到：
+NAME             COMPLETIONS   DURATION   AGE
+test-job         0/1           5s         5s
+等待任务执行完成：kubectl get jobs -w  完成后类似：
+NAME       COMPLETIONS   DURATION   AGE
+test-job   1/1           15s        20s
+
+这里的 1/1 表示：
+- 期望完成次数：1
+- 实际成功完成次数：1
+注意：Job 完成后，Pod 通常不会立即删除，而是保留一段时间，方便查看执行结果。
+
+3. 查看 Job 执行日志
+先查看 Pod：kubectl get pods -l job-name=test-job
+然后查看日志：kubectl logs -l job-name=test-job
+你应该能看到：
+Job Start
+Thu Nov  5 ...
+Hello Kubernetes
+Job Finished
+这就是 Job 的基本使用方式。
+
+4. Job 的几个重要参数
+completions：需要成功完成几次
+例如：
+spec:
+  completions: 5
+表示这个 Job 需要成功完成5次。
+
+parallelism：允许同时运行几个 Pod
+例如：
+spec:
+  completions: 5
+  parallelism: 2
+表示：
+- 总共需要成功完成5个任务。
+- 最多允许同时运行2个 Pod。
+- 完成一个后，可以继续启动下一个。
+
+假设每个任务需要10秒：
+大致会分批执行：
+第一批：Pod1 + Pod2
+第二批：Pod3 + Pod4
+第三批：Pod5
+
+backoffLimit：失败重试次数
+例如：
+spec:
+  backoffLimit: 3
+表示任务失败后，Job 控制器最多允许进行3次重试（不包含最初那次执行）。
+如果超过允许的失败重试次数，Job 会进入失败状态。
+
+activeDeadlineSeconds：任务最长运行时间
+例如：
+spec:
+  activeDeadlineSeconds: 60
+表示 Job 最长运行60秒，超时后 Kubernetes 会终止任务并将 Job 标记为失败。
+
+5. Job 完整示例：并行执行任务
+我们再做一个小实验。
+cat > /root/job-parallel.yaml <<'EOF'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: parallel-job
+spec:
+  completions: 5
+  parallelism: 2
+  backoffLimit: 2
+  template:
+    spec:
+      containers:
+      - name: worker
+        image: busybox:1.36
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Task Start"
+          sleep 10
+          echo "Task Finished"
+      restartPolicy: Never
+EOF
+
+应用：kubectl apply -f /root/job-parallel.yaml
+观察：kubectl get jobs -w
+另开一个终端观察 Pod：kubectl get pods -l job-name=parallel-job -w
+最后查看结果：kubectl describe job parallel-job
+重点看：
+Parallelism:    2
+Completions:    5
+Succeeded:      5
+
+这就是 Job 并行任务的用法。
+
+四、CronJob：定时任务控制器
+1. CronJob 是什么？CronJob 可以理解为 Linux 系统中的 crontab。
+我们以前在 Linux 中可能使用：crontab -e
+设置定时任务：0 2 * * * /root/backup.sh
+表示每天凌晨2点执行备份脚本。
+Kubernetes 也有类似功能。
+CronJob 可以按照指定时间，自动创建 Job，由 Job 创建 Pod，最终完成任务。它们之间的关系：
+CronJob
+   |
+   | 按照时间创建
+   v
+  Job
+   |
+   | 创建
+   v
+  Pod
+   |
+   | 执行任务
+   v
+  完成退出
+
+记住：
+CronJob 不直接运行容器，它负责定时创建 Job。
+
+2. CronJob 时间表达式
+CronJob 使用标准的五段式 Cron 表达式：分 时 日 月 星期
+格式：* * * * *
+位置	含义	范围
+第1位	分钟	0-59
+第2位	小时	0-23
+第3位	日期	1-31
+第4位	月份	1-12
+第5位	星期	0-6（通常0为星期日）
+
+常用示例：
+Cron 表达式	执行时间
+* * * * *		每分钟
+*/5 * * * *		每5分钟
+0 * * * *		每小时
+0 2 * * *		每天凌晨2点
+0 3 * * 0		每周日凌晨3点
+0 0 1 * *		每月1日凌晨0点
+30 8 * * 1-5	工作日早上8:30
+
+这里需要注意：
+- * 表示任意值。
+- */5 表示每隔5个单位。
+- 1-5 表示范围。
+- 1,3,5 表示指定的多个值。
+
+3. 实战：创建一个每分钟执行的 CronJob
+为了方便观察，我们设置每分钟执行一次。创建 YAML：
+cat > /root/cronjob.yaml <<'EOF'
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: test-cronjob
+spec:
+  schedule: "*/1 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: cron-container
+            image: busybox:1.36
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "CronJob Start"
+              date
+              echo "Hello Kubernetes CronJob"
+          restartPolicy: Never
+EOF
+
+应用：kubectl apply -f /root/cronjob.yaml
+查看 CronJob：kubectl get cronjobs
+缩写：kubectl get cj
+输出类似：
+NAME           SCHEDULE      SUSPEND   ACTIVE   LAST SCHEDULE
+test-cronjob   */1 * * * *   False     0        <none>
+等待一分钟，再次查看：kubectl get cronjobs
+查看 Job：kubectl get jobs
+查看 Pod：kubectl get pods -o wide
+查看日志：kubectl logs -l job-name=<实际Job名称>
+你会发现：每过一分钟，CronJob 就会创建一个新的 Job。每个 Job 再创建一个 Pod。
+这就是定时任务的完整过程。
+
+4. CronJob 重要参数
+concurrencyPolicy：并发执行策略。这是生产环境中非常重要的配置。
+concurrencyPolicy: Allow
+有三个值：
+参数	含义
+Allow	允许多个 Job 同时运行（默认）
+Forbid	如果上一个 Job 还没完成，就跳过本次调度
+Replace	如果上一个 Job 还在运行，就终止旧 Job 并启动新的
+
+例如：
+假设每分钟执行一次备份，但是备份需要3分钟。
+- Allow：可能同时有3个备份任务运行。
+- Forbid：上一个任务没结束，就跳过后续调度。
+- Replace：新任务启动时替换仍在运行的旧任务。
+successfulJobsHistoryLimit：保留多少个成功 Job
+successfulJobsHistoryLimit: 3  表示保留最近3个成功完成的 Job。
+failedJobsHistoryLimit：保留多少个失败 Job
+failedJobsHistoryLimit: 1 表示保留最近1个失败的 Job。
+
+suspend：暂停定时任务
+suspend: true  表示暂停后续调度，但已经启动的 Job 不会因此自动终止。
+
+恢复：kubectl patch cronjob test-cronjob -p '{"spec":{"suspend":false}}'
+暂停：kubectl patch cronjob test-cronjob -p '{"spec":{"suspend":true}}'
+
+5. CronJob 完整示例
+实际生产中，可以这样配置：
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daily-backup
+spec:
+  schedule: "0 2 * * *"
+  timeZone: "Asia/Shanghai"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: busybox:1.36
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "开始执行数据库备份"
+              date
+              echo "备份完成"
+          restartPolicy: Never
+
+这里有几个重点：
+- 每天凌晨2点执行。
+- 使用上海时区。
+- 不允许备份任务重叠执行。
+- 成功任务保留3个。
+- 失败任务保留1个。
+- 任务失败最多重试2次。
+注意：这个示例只是模拟备份过程，真正的数据库备份还需要连接数据库，并将备份文件保存到持久化存储或外部存储中。
+另外，CronJob 的 timeZone 字段在现代 Kubernetes 中受支持，你当前集群 v1.37.2 可以使用。
+
+五、三种控制器的综合对比
+现在把今天学习的三个控制器放在一起对比。
+对比项目		DaemonSet	Job		CronJob
+核心用途		每个节点运行 Pod	一次性任务	定时任务
+是否持续运行	通常是		否		定时触发
+是否自动创建 Pod	是		是		通过 Job 创建
+任务完成后	Pod 继续运行	Job 完成		等待下次调度
+典型应用		日志、监控	备份、批处理	定时备份、清理
+
+六、常用查看与删除命令汇总
+这部分建议收录到你的 WinLinuxTool 命令库中。
+命令			作用
+kubectl get ds		查看 DaemonSet
+kubectl get jobs		查看 Job
+kubectl get cj		查看 CronJob
+kubectl describe ds 名称	查看 DaemonSet 详情
+kubectl describe job 名称	查看 Job 详情
+kubectl describe cj 名称	查看 CronJob 详情
+kubectl logs Pod名称	查看任务日志
+kubectl delete ds 名称	删除 DaemonSet
+kubectl delete job 名称	删除 Job
+kubectl delete cj 名称	删除 CronJob
+
+特别提醒：删除 CronJob 不会自动删除之前已经创建的 Job。
+例如：kubectl delete cj test-cronjob
+如果之前创建了多个 Job，它们可能仍然存在。
+需要单独清理：kubectl delete jobs -l app=xxx
+前提是这些 Job 确实带有对应标签。否则可以直接指定 Job 名称删除。
+
+七、结合你的 Kubernetes 集群做课后实验
+你的集群目前有三个节点：
+k8s-master   192.168.79.130
+k8s-node1
+k8s-node2
+
+这里有一个实际问题需要特别注意：
+你的 master 是控制平面节点，默认带有 NoSchedule 污点。因此，上面的 DaemonSet 示例默认可能只在 node1、node2 上运行，而不是三个节点都有。
+查看污点：kubectl describe node k8s-master | grep Taints
+如果想让 DaemonSet 连 master 也运行，可以在 DaemonSet 的 spec.template.spec 中增加：
+tolerations:
+- key: node-role.kubernetes.io/control-plane
+  operator: Exists
+  effect: NoSchedule
+这样就允许它容忍控制平面节点的默认污点。
+
+课后练习
+建议你亲自完成下面五项：
+第9课实验清单
+0/5 已完成
+[ ] 创建 nginx-daemonset.yaml，观察 Pod 分布在哪些节点
+[ ] 创建 Job，让容器执行 date 和 hostname 后退出
+[ ] 创建一个 completions=5、parallelism=2 的 Job
+[ ] 创建每分钟执行一次的 CronJob，观察连续生成的 Job
+[ ] 暂停 CronJob，再恢复 CronJob，最后清理实验资源
+
+实验完成后，清理资源：
+kubectl delete -f /root/nginx-daemonset.yaml
+kubectl delete -f /root/job.yaml
+kubectl delete -f /root/job-parallel.yaml
+kubectl delete -f /root/cronjob.yaml

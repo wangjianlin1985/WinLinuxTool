@@ -1,0 +1,33 @@
+日志文件		作用与查看场景
+/var/log/messages	系统主要日志，记录系统消息和错误；排查服务器故障
+/var/log/secure	安全认证日志，记录 SSH 登录、su、sudo 等；排查异常登录
+/var/log/maillog	邮件服务日志；排查邮件收发故障
+/var/log/cron	计划任务日志；排查定时任务未执行的问题
+/var/log/boot.log	系统启动过程中的服务启动信息
+/var/log/dmesg	内核与硬件检测信息；排查驱动、磁盘等硬件问题
+/var/log/wtmp	二进制登录记录，使用 last 查看
+/var/log/btmp	二进制失败登录记录，使用 lastb 查看
+
+常用查看命令
+# 查看系统主要日志
+tail -f /var/log/messages
+#实时查看SSH登录尝试（用于监控谁在暴力破解）
+tail -f /var/log/secure
+# 查看计划任务日志
+tail -f /var/log/cron
+# 查看历史登录记录
+last
+# 查看失败登录记录
+lastb
+# 查看内核日志
+dmesg | less
+
+grep(过滤神器):从海量日志中提取关键行。
+#查看关于网卡的错误信息（忽略大小写）
+grep -i "error" /γar/log/messages
+#查看最近100行中关于 failed password 的记录
+tail -n 100 /var/log/secure I grep "Failed password"
+#查看某个时间段的安全日志（结合正则和管道）
+grep "May 18" /var/log/secure I grep "Accepted"
+
+另外，/var/log/dmesg 通常是启动时保存的内核消息文件，而 dmesg 命令可以查看当前内核环形缓冲区中的消息。

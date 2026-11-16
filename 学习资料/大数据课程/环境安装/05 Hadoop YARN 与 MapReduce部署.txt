@@ -1,0 +1,440 @@
+三、理解 YARN 核心组件
+YARN 全称：Yet Another Resource Negotiator
+中文可以理解为：另一种资源协调器。
+它的主要任务是管理集群计算资源，并调度计算任务。
+1. ResourceManager（资源管理器）
+ResourceManager 是 YARN 的核心管理组件。
+主要负责：
+- 管理整个集群的计算资源。
+- 接收客户端提交的计算任务。
+- 为任务分配资源。
+- 管理任务调度。
+在我们的 A 方案中：
+ResourceManager 运行在 master 上。
+默认 Web 管理界面：
+http://192.168.79.10:8088
+
+2. NodeManager（节点管理器）
+NodeManager 运行在每台工作节点上。
+主要负责：
+- 管理当前节点的 CPU 和内存。
+- 启动和管理 Container。
+- 监控任务执行状态。
+- 定期向 ResourceManager 汇报节点资源情况。
+A 方案只有一台 Linux 虚拟机，所以 NodeManager 也运行在 master 上。
+
+3. ApplicationMaster（应用程序管理器）
+ApplicationMaster 是每个应用程序对应的管理组件。
+例如：我们提交一个 WordCount 任务，YARN 会为这个任务启动一个 ApplicationMaster。
+它负责：
+- 向 ResourceManager 申请资源。
+- 协调 Map 和 Reduce 任务。
+- 监控任务执行进度。
+- 处理任务执行过程中的异常。
+注意：ApplicationMaster 不是固定常驻服务，而是随着应用程序启动和结束。
+
+4. Container（计算容器）
+Container 是 YARN 分配给应用程序的计算资源。
+例如：
+一个 Container 可以分配：
+- 1GB 内存。
+- 1 个虚拟 CPU。
+MapTask 和 ReduceTask 都需要运行在 Container 中。
+
+5. YARN 工作流程
+YARN 任务执行流程
+(1). 客户端提交任务
+   用户提交 MapReduce 程序。
+(2). ResourceManager 接收任务
+   接收申请并安排 ApplicationMaster。
+(3). 启动 ApplicationMaster
+   由 NodeManager 启动对应 Container。
+(4). 申请计算资源
+   ApplicationMaster 向 ResourceManager 申请 Map、Reduce 所需资源。
+(5). NodeManager 启动 Container
+   在节点上执行 MapTask 和 ReduceTask。
+(6). 任务完成
+   将结果写入 HDFS，向客户端返回执行状态。
+
+四、配置 YARN
+现在开始动手部署。 
+本节课继续沿用之前配置好的 JDK、Hadoop 环境变量和 HDFS。
+第 1 步：检查 Hadoop 环境【过】
+ 输入jps目前应该能看到类似：
+NameNode
+DataNode
+SecondaryNameNode
+Jps
+
+第 2 步：配置 yarn-site.xml
+编辑配置文件：
+vi $HADOOP_HOME/etc/hadoop/yarn-site.xml
+在 <configuration> 标签内部写入：
+<!-- ResourceManager 主机地址 -->
+<property>
+    <name>yarn.resourcemanager.hostname</name>
+    <value>master</value>
+</property>
+
+<!-- NodeManager 提供的辅助服务，供 MapReduce 使用 Shuffle -->
+<property>
+    <name>yarn.nodemanager.aux-services</name>
+    <value>mapreduce_shuffle</value>
+</property>
+
+<!-- NodeManager 可使用的物理内存，单位 MB -->
+<property>
+    <name>yarn.nodemanager.resource.memory-mb</name>
+    <value>3072</value>
+</property>
+
+<!-- NodeManager 可使用的虚拟 CPU 核心数 -->
+<property>
+    <name>yarn.nodemanager.resource.cpu-vcores</name>
+    <value>2</value>
+</property>
+
+<!-- Container 最小内存，单位 MB -->
+<property>
+    <name>yarn.scheduler.minimum-allocation-mb</name>
+    <value>512</value>
+</property>
+
+<!-- Container 最大内存，单位 MB -->
+<property>
+    <name>yarn.scheduler.maximum-allocation-mb</name>
+    <value>3072</value>
+</property>
+
+<!-- Container 最小虚拟 CPU 数量 -->
+<property>
+    <name>yarn.scheduler.minimum-allocation-vcores</name>
+    <value>1</value>
+</property>
+
+<!-- Container 最大虚拟 CPU 数量 -->
+<property>
+    <name>yarn.scheduler.maximum-allocation-vcores</name>
+    <value>2</value>
+</property>
+
+
+参数解释：
+参数	作用
+yarn.resourcemanager.hostname	指定 ResourceManager 所在主机
+yarn.nodemanager.aux-services	启用 MapReduce Shuffle 服务
+yarn.nodemanager.resource.memory-mb	NodeManager 可分配内存
+yarn.nodemanager.resource.cpu-vcores	NodeManager 可分配 CPU
+yarn.scheduler.minimum-allocation-mb	Container 最小内存
+yarn.scheduler.maximum-allocation-mb	Container 最大内存
+这里按照 6GB 内存的 A 方案虚拟机进行资源规划，给 YARN 分配 3GB 内存和 2 个虚拟 CPU，给操作系统及其他 Hadoop 服务预留资源。
+注意：这不是物理内存全部分配给 YARN，实际使用量还受到其他进程和系统资源限制。
+
+第 3 步：配置 mapred-site.xml
+MapReduce 是 Hadoop 的分布式计算框架。
+我们需要告诉 Hadoop：MapReduce 任务交给 YARN 管理和调度。
+编辑配置文件：
+vi $HADOOP_HOME/etc/hadoop/mapred-site.xml
+
+在 <configuration> 标签内部写入：
+    <!-- ========================================== -->
+    <!-- MapReduce 运行环境配置 -->
+    <!-- ========================================== -->
+
+    <!-- 指定 MapReduce 框架运行在 YARN 上 -->
+    <property>
+        <name>mapreduce.framework.name</name>
+        <value>yarn</value>
+    </property>
+
+    <!-- 指定 YARN ApplicationMaster 的 MapReduce 环境变量 -->
+    <property>
+        <name>yarn.app.mapreduce.am.env</name>
+        <value>HADOOP_MAPRED_HOME=/usr/local/bigdata/hadoop</value>
+    </property>
+
+    <!-- 指定 Map Task 的 MapReduce 环境变量 -->
+    <property>
+        <name>mapreduce.map.env</name>
+        <value>HADOOP_MAPRED_HOME=/usr/local/bigdata/hadoop</value>
+    </property>
+
+    <!-- 指定 Reduce Task 的 MapReduce 环境变量 -->
+    <property>
+        <name>mapreduce.reduce.env</name>
+        <value>HADOOP_MAPRED_HOME=/usr/local/bigdata/hadoop</value>
+    </property>
+
+    <!-- MapReduce ApplicationMaster 使用的内存 -->
+    <property>
+        <name>yarn.app.mapreduce.am.resource.mb</name>
+        <value>1024</value>
+    </property>
+
+    <!-- MapTask 使用的内存 -->
+    <property>
+        <name>mapreduce.map.memory.mb</name>
+        <value>1024</value>
+    </property>
+
+    <!-- ReduceTask 使用的内存 -->
+    <property>
+        <name>mapreduce.reduce.memory.mb</name>
+        <value>1024</value>
+    </property>
+
+    <!-- MapTask JVM 最大堆内存 -->
+    <property>
+        <name>mapreduce.map.java.opts</name>
+        <value>-Xmx768m</value>
+    </property>
+
+    <!-- ReduceTask JVM 最大堆内存 -->
+    <property>
+        <name>mapreduce.reduce.java.opts</name>
+        <value>-Xmx768m</value>
+    </property>
+
+    <!-- ApplicationMaster JVM 最大堆内存 -->
+    <property>
+        <name>yarn.app.mapreduce.am.command-opts</name>
+        <value>-Xmx768m</value>
+    </property>
+
+这里有几个重要概念：
+参数	说明
+mapreduce.framework.name	指定计算任务使用 YARN
+yarn.app.mapreduce.am.resource.mb	ApplicationMaster 内存
+mapreduce.map.memory.mb	MapTask 内存
+mapreduce.reduce.memory.mb	ReduceTask 内存
+mapreduce.map.java.opts	MapTask JVM 堆内存参数
+mapreduce.reduce.java.opts	ReduceTask JVM 堆内存参数
+注意：memory.mb 是 Container 申请的内存，java.opts 是 JVM 堆内存上限，两者不是同一个概念。
+
+第 4 步：检查 workers 文件
+编辑：vi $HADOOP_HOME/etc/hadoop/workers
+A 方案是单机伪分布式，因此写入：
+master
+这里先解释一下：
+- A 方案：只有 master。
+- B 方案：后面扩展成真正的三节点集群时，再加入 worker1、worker2。
+这样就可以沿用同一套 Hadoop 配置思路。
+
+第 5 步：检查配置文件
+执行：hadoop version
+检查 Hadoop 配置：
+cat $HADOOP_HOME/etc/hadoop/yarn-site.xml
+cat $HADOOP_HOME/etc/hadoop/mapred-site.xml
+
+检查 SSH 免密：
+ssh master hostname
+应该返回：
+master
+如果 SSH 需要输入密码，先处理 SSH 免密问题，再启动 YARN。
+
+五、启动 YARN 服务
+前面的配置已经完成，现在启动 YARN。
+第 1 步：启动 YARN
+使用 dsj_admin 用户：
+start-yarn.sh
+这个脚本主要负责启动：
+- ResourceManager
+- NodeManager
+启动过程如果正常，应该能看到类似：
+Starting resourcemanager
+Starting nodemanager
+
+注意：这里不需要再次执行 hdfs namenode -format。
+也不需要重新启动 HDFS。
+
+第 2 步：检查 Java 进程
+执行：jps
+正常情况下应该看到：
+NameNode
+DataNode
+SecondaryNameNode
+ResourceManager
+NodeManager
+Jps
+
+
+预期结果：5 个 Hadoop 服务进程
+各进程对应关系：
+进程	所属组件	作用
+NameNode	HDFS	管理文件系统元数据
+DataNode	HDFS	存储数据块
+SecondaryNameNode	HDFS	辅助检查点合并
+ResourceManager	YARN	管理集群资源
+NodeManager	YARN	管理节点资源
+
+如果 ResourceManager 或 NodeManager 没有启动，不要急着继续，先检查日志【注意实际日志路径】：
+ls -lh $HADOOP_HOME/logs/
+查看 ResourceManager 日志：
+tail -n 100 $HADOOP_HOME/logs/*resourcemanager*.log
+查看 NodeManager 日志：
+tail -n 100 $HADOOP_HOME/logs/*nodemanager*.log
+
+第 3 步：查看 YARN Web 管理界面
+ResourceManager Web UI
+YARN 集群资源管理界面
+http://192.168.79.10:8088
+NodeManager Web UI
+http://192.168.79.10:8042
+
+ResourceManager 页面可以看到：
+- Cluster Metrics：集群资源统计。
+- Nodes：节点列表。
+- Applications：提交的应用程序。
+- Scheduler：资源调度器。
+NodeManager 页面可以查看当前节点的资源和 Container 信息。
+
+如果页面无法访问，检查：
+ss -lntp | grep -E '8088|8042'
+以及：
+firewall-cmd --state
+
+
+六、MapReduce WordCount 实战
+本节课重点实战
+现在我们真正提交一个 MapReduce 计算任务。
+我们使用 Hadoop 自带的 WordCount 示例程序。
+WordCount 的作用是统计文本中每个单词出现的次数。
+
+例如，准备一个文件：
+hello hadoop
+hello spark
+hello world
+hadoop spark
+
+预期结果：
+hadoop  2
+hello   3
+spark   2
+world   1
+
+第 1 步：创建测试文件
+在 master 上执行：
+mkdir -p ~/wordcount
+创建文件：
+cat > ~/wordcount/input.txt <<'EOF'
+hello hadoop
+hello spark
+hello world
+hadoop spark
+EOF
+检查文件：
+cat ~/wordcount/input.txt
+
+第 2 步：创建 HDFS 输入目录
+hdfs dfs -mkdir -p /user/dsj_admin/wordcount/input
+上传文件：
+hdfs dfs -put ~/wordcount/input.txt /user/dsj_admin/wordcount/input/
+检查 HDFS：
+hdfs dfs -ls /user/dsj_admin/wordcount/input
+查看文件内容：
+hdfs dfs -cat /user/dsj_admin/wordcount/input/input.txt
+
+第 3 步：找到 MapReduce 示例程序
+执行：
+ls $HADOOP_HOME/share/hadoop/mapreduce/hadoop-mapreduce-examples-*.jar
+正常情况下会显示一个 Hadoop Examples JAR 文件。
+这个 JAR 包里面已经包含了 WordCount 示例程序，不需要我们自己编写 Java 代码。
+
+第 4 步：提交 MapReduce 任务
+执行【命令太长请合并2行】：
+hadoop jar $HADOOP_HOME/share/hadoop/mapreduce/hadoop-mapreduce-examples-*.jar 
+wordcount /user/dsj_admin/wordcount/input /user/dsj_admin/wordcount/output
+
+这条命令非常重要，我们拆开解释：
+参数	说明
+hadoop jar	执行 Hadoop JAR 程序
+hadoop-mapreduce-examples	Hadoop 示例程序包
+wordcount	指定 WordCount 计算任务
+input	HDFS 输入目录
+output	HDFS 输出目录
+
+执行后，Hadoop 会：
+1. 从 HDFS 读取输入文件。
+2. 向 YARN 提交应用程序。
+3. ResourceManager 分配资源。
+4. 启动 ApplicationMaster。
+5. 执行 MapTask。
+6. 执行 Shuffle 和 ReduceTask。
+7. 将计算结果写入 HDFS。
+成功时会看到类似：
+map 100% reduce 100%
+以及：
+Job ... completed successfully
+
+第 5 步：查看计算结果
+执行：hdfs dfs -ls /user/dsj_admin/wordcount/output
+正常情况下有：
+_SUCCESS
+part-r-00000
+
+查看结果：
+hdfs dfs -cat /user/dsj_admin/wordcount/output/part-r-00000
+预期输出：
+hadoop  2
+hello   3
+spark   2
+world   1
+
+WordCount 实战成功标准
+- HDFS 输入文件上传成功。
+- YARN 成功接收任务。
+- MapTask 和 ReduceTask 执行成功。
+- HDFS 输出目录生成 _SUCCESS。
+- 统计结果与预期一致。
+
+七、在 YARN 中查看计算任务
+刚才 WordCount 已经执行成功，我们再通过命令查看 YARN 的任务状态。
+第 1 步：查看所有应用程序
+yarn application -list -appStates ALL
+
+可以看到：
+- Application ID：任务唯一编号。
+- Application Name：任务名称。
+- Application Type：应用程序类型。
+- User：提交任务的用户。
+- State：任务状态。
+- Final-State：最终执行状态。
+常见任务状态：
+状态	含义
+NEW	新建
+NEW_SAVING	正在保存
+SUBMITTED	已提交
+ACCEPTED	已接受
+RUNNING	正在运行
+FINISHED	已完成
+FAILED	执行失败
+KILLED	被终止
+
+第 2 步：查看 YARN 节点
+yarn node -list -all
+A 方案应该只有一个节点：
+master
+节点状态应该为：
+RUNNING
+
+第 3 步：查看任务日志
+先找到 Application ID：
+yarn application -list -appStates ALL
+然后执行：
+yarn logs -applicationId application_任务编号
+这个命令可以查看应用程序的运行日志，帮助定位 MapReduce 任务失败的原因。
+
+八、常见问题及解决方法
+问题			可能原因			解决方向
+ResourceManager 没启动	配置错误或 Java 环境异常	查看 RM 日志
+NodeManager没启动	SSH 或资源配置问题		检查 workers 和日志
+8088 无法访问		服务没启动或端口问题	检查监听端口
+MapReduce 无法提交	framework.name 配置错误	检查 mapred-site.xml
+Shuffle 失败		辅助服务没有配置		检查 yarn.nodemanager.aux-services
+Container 内存不足		资源配置不匹配		检查 Container 内存限制
+Output directory already exists	输出目录已经存在	删除旧输出目录
+
+特别注意最后一个问题：MapReduce 不允许输出目录提前存在。
+如果你需要重新执行 WordCount：
+hdfs dfs -rm -r /user/dsj_admin/wordcount/output
+然后重新提交任务即可。

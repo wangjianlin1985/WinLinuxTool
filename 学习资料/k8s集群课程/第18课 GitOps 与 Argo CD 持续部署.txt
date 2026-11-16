@@ -1,0 +1,389 @@
+这一课开始进入 Kubernetes 的自动化运维阶段。
+前面我们学习了 Kubernetes 的核心资源，包括：
+- Pod、ReplicaSet、Deployment
+- Service、Ingress
+- ConfigMap、Secret
+- PV、PVC、StorageClass
+- StatefulSet、DaemonSet、Job、CronJob
+- HPA 自动伸缩
+- 健康检查、资源调度
+- RBAC、NetworkPolicy
+- 集群监控、日志管理
+- Helm 包管理
+这些内容解决的是：如何在 Kubernetes 集群中部署、管理和运行应用。
+
+那么接下来有一个实际问题：
+假设你有一个 Java 微服务项目，里面包含 10 个微服务，每次修改配置、更新镜像、发布应用，
+都需要登录 Kubernetes Master 节点，手动执行：
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+kubectl set image deployment/user-service user-service=nginx:2.0
+kubectl rollout status deployment/user-service
+如果每天都要发布多次，手动操作就比较麻烦，而且容易出现人为错误。
+
+有没有一种方式：
+1. 我只需要修改 Git 仓库中的 YAML 文件。
+2. Kubernetes 自动发现配置变化。
+3. 自动部署到集群。
+4. 自动检测部署状态。
+5. 如果部署失败，可以回滚到之前的版本。
+这就是本节课要学习的 GitOps + Argo CD。
+
+一、什么是 GitOps？
+GitOps 可以理解为：把 Git 仓库作为 Kubernetes 应用部署配置的唯一可信来源，通过自动化工具将 Git 中的配置同步到 Kubernetes 集群。
+
+以前的部署方式：传统手动部署
+开发人员修改 YAML 文件
+↓
+登录 Kubernetes Master
+↓
+手动执行 kubectl apply
+↓
+Kubernetes 部署应用
+↓
+
+GitOps 自动部署方式：GitOps 自动部署
+开发人员修改 Git 仓库
+↓
+Git 提交新版本配置
+↓
+Argo CD 检测 Git 仓库变化
+↓
+自动同步 Kubernetes 集群
+↓
+应用运行状态与 Git 配置保持一致
+
+GitOps 有几个核心思想：
+核心思想		说明
+声明式管理	用 YAML 描述期望状态
+Git 版本控制	每次修改都有提交记录
+自动同步		自动将 Git 配置部署到集群
+状态校验		检查实际状态与期望状态
+可追溯		可以查看历史修改记录
+回滚		可以恢复以前的 Git 配置版本
+注意：GitOps 并不是 Git 本身负责部署，而是需要 Argo CD、Flux 等工具来实现自动化。
+
+二、什么是 Argo CD？
+Argo CD 是 Kubernetes 生态中非常流行的 GitOps 持续交付工具。
+它主要负责：
+- 连接 Git 仓库。
+- 读取 Kubernetes YAML 配置。
+- 监控 Git 仓库变化。
+- 对比 Git 中的期望状态和集群中的实际状态。
+- 自动同步配置。
+- 提供 Web 可视化管理界面。
+- 查看部署历史和执行回滚。
+
+Argo CD 本身也是部署在 Kubernetes 集群里面的一组 Pod。
+它的主要组成部分：
+组件			作用
+argocd-server		提供 Web UI 和 API
+argocd-repo-server	连接 Git 仓库，获取并生成部署清单
+argocd-application-controller 对比期望状态与实际状态，执行同步
+argocd-dex-server		身份认证集成组件（可选）
+argocd-redis		缓存数据
+
+可以这样理解：Git 仓库负责保存配置，Argo CD 负责监控和同步，Kubernetes 负责运行应用。
+
+三、GitOps 的工作流程
+假设我们需要部署一个 Nginx 应用。
+Git 仓库中有一个目录：
+k8s-gitops/
+├── nginx/
+│   ├── deployment.yaml
+│   └── service.yaml
+└── README.md
+
+其中 deployment.yaml：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deploy
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+
+假设现在需要把 Nginx 副本数从 3 改成 5。
+只需要修改：replicas: 5
+然后提交 Git：
+git add .
+git commit -m "update nginx replicas to 5"
+git push
+Argo CD 发现 Git 配置发生变化后，就可以把集群中的 Nginx 副本数调整为 5。
+整个过程不需要手动登录 Kubernetes 执行 kubectl apply。
+
+注意：这里的自动部署需要提前开启 Argo CD 自动同步功能。
+
+四、安装 Argo CD
+接下来我们在自己的 Kubernetes 集群中安装 Argo CD。
+本次实验直接使用现有集群，不需要重新创建集群。
+1. 创建 Argo CD 命名空间
+kubectl create namespace argocd
+查看：kubectl get namespaces
+
+2. 安装 Argo CD
+执行官方安装清单：
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+这个清单会创建 Argo CD 所需的 Deployment、Service、ConfigMap、Secret、RBAC 等资源。
+注意：这里使用 stable 分支的安装清单，实际生产环境建议固定经过验证的 Argo CD 版本，而不是长期跟随最新版本。
+
+3. 查看 Argo CD Pod
+kubectl get pods -n argocd
+查看 Service：kubectl get svc -n argocd
+等待相关 Pod 进入 Running 状态：kubectl get pods -n argocd -w
+按 Ctrl+C 退出实时监控。
+
+4. 获取初始登录密码
+Argo CD 默认管理员用户名：admin
+获取初始密码：
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+记下输出的密码。
+
+5. 访问 Argo CD Web 管理界面
+我们先使用端口转发方式访问。
+在 Master 上执行：kubectl port-forward svc/argocd-server -n argocd 8080:443 --address 0.0.0.0
+保持这个终端运行。然后在 Windows 11 浏览器中访问：Argo CD Web 管理界面
+https://192.168.79.130:8080
+浏览器可能提示证书不受信任，这是实验环境使用自签名证书的正常现象。
+
+登录：
+- Username：admin
+- Password：刚才获取的初始密码
+登录后建议立即修改管理员密码，并妥善保存。
+
+如果访问不了，先检查：
+kubectl get pods -n argocd
+kubectl get svc -n argocd
+以及 Master 上的端口转发进程是否还在运行。
+
+五、创建 Git 仓库并部署应用
+这一部分是本课最重要的实操。
+我们使用 Argo CD 官方公开示例仓库，先不要求你自己创建 GitHub 仓库。
+
+示例仓库：
+Argo CD 官方示例 GitHub 仓库1. 创建 Application 配置文件
+Argo CD 中有一个非常重要的概念：Application（应用）
+Application 用于告诉 Argo CD：
+- Git 仓库地址是什么？
+- 部署哪个目录？
+- 部署到哪个 Kubernetes 集群？
+- 部署到哪个 Namespace？
+- 是否自动同步？
+创建文件：
+cat > /root/argocd-app.yaml <<'EOF'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: HEAD
+    path: guestbook
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+EOF
+
+这里有几个重要参数。
+参数			含义
+metadata.name		Application 名称
+metadata.namespace	Application 所在命名空间
+repoURL			Git 仓库地址
+targetRevision		Git 分支、标签或提交版本
+path			Git 仓库中的配置目录
+destination.server		目标 Kubernetes 集群
+destination.namespace	应用部署的命名空间
+automated		开启自动同步
+prune			删除 Git 中已经移除的资源
+selfHeal			自动修复集群中被人为修改的资源
+
+这里特别注意：
+prune: true 表示 Git 中删除的资源，在同步时也会从集群删除。因此不要随意修改生产环境的 Git 配置。
+selfHeal: true 表示如果有人直接使用 kubectl 修改了资源，Argo CD 会尝试将其恢复到 Git 中声明的状态。
+
+2. 创建 Argo CD Application
+执行：kubectl apply -f /root/argocd-app.yaml
+查看：kubectl get applications -n argocd
+查看详细状态：kubectl describe application guestbook -n argocd
+
+3. 查看部署结果
+kubectl get pods
+kubectl get deployments
+kubectl get svc
+如果部署成功，你就能看到 Guestbook 示例应用对应的 Kubernetes 资源。
+
+在 Argo CD Web 页面中，也可以看到：
+- Application 名称：guestbook
+- Sync Status：Synced
+- Health Status：Healthy
+这就完成了第一次 GitOps 自动部署。
+
+六、理解 Argo CD 的两个重要状态
+在 Argo CD 中，最常见的两个状态是：
+1. Sync Status（同步状态）
+状态		含义
+Synced		集群配置与 Git 一致
+OutOfSync	集群配置与 Git 不一致
+Unknown		无法确定同步状态
+
+例如：
+Git 中定义：replicas: 3
+你手动执行：kubectl scale deployment guestbook-ui --replicas=5
+如果 GitOps 自动同步和自愈功能正常工作，Argo CD 会发现实际配置偏离 Git 中的期望配置，并尝试恢复。
+
+2. Health Status（健康状态）
+状态		含义
+Healthy		应用健康
+Progressing	正在部署或启动
+Degraded	应用存在异常
+Suspended	应用处于暂停状态
+Missing		资源不存在
+Unknown		无法判断健康状态
+这两个状态不是一回事。
+
+例如：
+- Synced + Healthy：配置一致，应用正常。
+- Synced + Degraded：配置一致，但应用运行异常。
+- OutOfSync + Healthy：应用当前运行正常，但配置与 Git 不一致。
+记住：Synced 不代表应用一定能正常运行，Healthy 也不代表配置一定与 Git 一致。
+
+七、GitOps 自动修复实验
+我们来模拟一次生产环境中常见的操作。
+假设 Git 中定义了 3 个副本。
+先查看：kubectl get deployment
+然后人为将副本数修改为 5：kubectl scale deployment guestbook-ui --replicas=5
+注意：这里的 Deployment 名称以实际部署结果为准，先通过 kubectl get deployment 确认。
+等待一会儿：kubectl get deployment
+由于我们开启了：
+automated:
+  prune: true
+  selfHeal: true
+Argo CD 会检测到实际状态发生变化，并将副本数恢复到 Git 中定义的值。
+这个实验就是 GitOps 的一个核心能力：
+不再依赖人工保证集群状态，而是通过持续对比和同步，让集群自动向 Git 声明的状态收敛。
+
+八、GitOps 如何实现版本回滚？
+假设我们部署了：image: nginx:1.27
+后来更新为：image: nginx:1.28
+部署后发现新版本有问题。
+传统方式可能需要手动修改 Deployment，再重新执行 kubectl apply。
+
+GitOps 推荐通过 Git 恢复历史版本：
+git log --oneline
+找到之前正常的提交记录，然后执行：
+git revert <提交ID>
+推送：git push
+Argo CD 检测到 Git 中的配置恢复，就会重新同步之前的配置。
+
+这里需要区分：
+- Git 回滚：恢复历史配置，是 GitOps 推荐的回滚方式。
+- Argo CD Rollback：通过 Argo CD 回滚历史部署版本。
+- Kubernetes Rollout Undo：回滚 Deployment 的历史 ReplicaSet。
+三者不是同一个概念。
+特别注意：开启自动同步时，不能简单依赖 Argo CD 的手动 Rollback 按钮；对于 GitOps 工作流，优先通过 Git revert 恢复期望状态。
+
+九、Argo CD 与 Helm 有什么关系？
+上一课我们学习了 Helm，这一课学习 Argo CD，它们可以结合使用。
+工具		主要职责
+Helm		管理 Kubernetes 应用模板和安装配置
+Argo CD		监控 Git 仓库并自动部署应用
+Git		保存应用部署配置和版本记录
+Kubernetes	实际运行应用
+
+例如 Git 仓库可以这样组织：
+k8s-gitops/
+├── nginx/
+│   ├── Chart.yaml
+│   ├── values.yaml
+│   └── templates/
+│       ├── deployment.yaml
+│       └── service.yaml
+│
+├── mysql/
+│   ├── Chart.yaml
+│   └── values.yaml
+│
+└── applications/
+    ├── nginx-app.yaml
+    └── mysql-app.yaml
+
+Argo CD 可以直接识别 Helm Chart，并使用 Helm 渲染 Kubernetes 配置，然后管理应用的部署和同步。
+注意：Argo CD 使用 Helm 主要是渲染模板，应用的生命周期仍由 Argo CD 管理，并不是简单执行一次 helm install。
+
+十、GitOps 在企业中的实际应用
+假设以后我们要将之前学习过的 Docker Compose Java 微服务项目迁移到 Kubernetes。
+企业可能采用下面的架构整个流程：
+1. 开发人员提交 Java 代码到 Git。
+2. Jenkins 或 GitLab CI 自动编译 Java 项目。
+3. 自动运行单元测试。
+4. 构建 Docker 镜像。
+5. 推送镜像到镜像仓库。
+6. 更新 Kubernetes 部署仓库中的镜像版本。
+7. Argo CD 检测 Git 配置变化。
+8. Argo CD 自动部署新版本到 Kubernetes。
+9. Kubernetes 启动新 Pod，完成应用更新。
+这里有一个非常重要的区别：
+
+Jenkins 主要负责 CI（持续集成），Argo CD 主要负责 CD（持续交付）。
+工具		用途
+GitHub / GitLab	代码仓库
+Jenkins		自动构建、测试
+Docker		构建容器镜像
+Harbor		存储容器镜像
+Helm		管理应用部署模板
+Argo CD		自动部署 Kubernetes 应用
+Kubernetes	运行微服务
+这也是现代企业 DevOps 比较典型的一套技术体系。
+
+十一、本课常用命令总结
+命令				作用
+kubectl create namespace argocd	创建 Argo CD 命名空间
+kubectl apply -n argocd -f install.yaml	安装 Argo CD
+kubectl get pods -n argocd		查看 Argo CD Pod
+kubectl get svc -n argocd		查看 Argo CD Service
+kubectl get applications -n argocd	查看应用列表
+kubectl describe application guestbook -n argocd	查看应用详情
+kubectl apply -f argocd-app.yaml	创建 Argo CD 应用
+kubectl port-forward svc/argocd-server -n argocd 8080:443 --address 0.0.0.0	开启 Web 访问
+kubectl get deployment		查看部署资源
+kubectl get pods -w		实时监控 Pod
+
+十二、本课学习总结
+学完第18课，你应该掌握以下知识：
+- [ ] 理解什么是 GitOps。
+- [ ] 理解 GitOps 与传统 kubectl 部署的区别。
+- [ ] 理解 Argo CD 的工作原理。
+- [ ] 了解 Argo CD 的核心组件。
+- [ ] 能够在 Kubernetes 集群中安装 Argo CD。
+- [ ] 能够访问 Argo CD Web 管理界面。
+- [ ] 能够创建 Application。
+- [ ] 能够连接 GitHub 仓库。
+- [ ] 能够实现 Git 配置自动同步。
+- [ ] 理解 Synced 和 Healthy 状态。
+- [ ] 理解自动修复和资源自动清理。
+- [ ] 理解 Git 版本回滚。
+- [ ] 理解 Argo CD 与 Helm 的配合方式。

@@ -1,0 +1,38 @@
+at 用于设置一次性定时任务，指定任务在未来某个时间执行一次。
+1. 常用命令
+at 10:30                 # 今天 10:30 执行任务
+at 10:30 tomorrow        # 明天 10:30 执行任务
+at now + 5 minutes       # 5 分钟后执行
+at now + 2 hours         # 2 小时后执行
+atq                      # 查看待执行任务队列
+atrm 2                   # 删除编号为 2 的任务
+at -c 2                  # 查看编号为 2 的任务内容
+
+2. 添加任务
+at now + 1 minute
+进入 at 交互界面后输入：
+/usr/bin/date >> /tmp/date.log
+按 Ctrl+D 提交任务。
+
+3. 任务时间写法
+写法	含义
+at 15:30	今天 15:30
+at midnight	午夜 00:00
+at noon	中午 12:00
+at now + 10 minutes	10 分钟后
+at now + 1 day	1 天后
+at 10:00 2026-10-26	指定日期和时间执行
+如果指定时间已经过去，at 通常会安排到下一个符合条件的日期。
+
+4. 服务管理（CentOS 7）
+systemctl status atd     # 查看服务状态
+systemctl start atd      # 启动服务
+systemctl enable atd     # 设置开机启动
+
+5. at 和 crontab 的区别
+对比	at		crontab
+任务类型	一次性任务	周期性任务
+示例	10 分钟后关机	每天凌晨备份
+查看任务	atq		crontab -l
+删除任务	atrm 任务编号	crontab -e 编辑删除
+记忆重点： at 添加一次性任务，atq 查看，atrm 删除；任务由 atd 服务负责调度。

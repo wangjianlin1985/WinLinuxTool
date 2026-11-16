@@ -1,0 +1,7 @@
+# 将Linux允许的内存映射区域数量上限设置为262144，因为Elasticsearch使用的Lucene底层会涉及内存映射文件
+if grep -q '^vm.max_map_count=' /etc/sysctl.conf; then
+    sed -i 's/^vm.max_map_count=.*/vm.max_map_count=262144/' /etc/sysctl.conf
+else
+    echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
+fi
+sysctl -p && echo "===== 检查ES系统参数 =====" && sysctl vm.max_map_count

@@ -1,0 +1,743 @@
+前面28课学习了 K8s 的基础、网络、存储、调度、监控、CI/CD、Helm、Istio、安全、Operator、生产环境运维等知识。
+从今天开始，我们要把这些知识真正串联起来，完成一个企业 Java 微服务项目从开发环境到 Kubernetes 集群的完整上云部署。
+
+这次不再是单独创建一个 Nginx Pod，也不是单独部署一个 Deployment，而是模拟企业实际项目：
+- Java 微服务应用。
+- MySQL 数据库。
+- Redis 缓存。
+- RabbitMQ 消息队列。
+- Nginx / Ingress 网关。
+- Kubernetes 集群部署。
+- Helm 统一管理。
+- Jenkins 自动构建。
+- Harbor 镜像仓库。
+- Prometheus + Grafana 监控。
+- 日志收集与故障排查。
+
+一、本次实战最终要实现什么？
+我们先看一下最终项目架构。整个项目模拟一个企业级电商后台系统。
+我们把它拆分成以下微服务：
+微服务		技术		主要职责
+gateway-service	Spring Cloud Gateway统一入口、路由
+user-service	Spring Boot	用户管理
+product-service	Spring Boot	商品管理
+order-service	Spring Boot	订单管理
+payment-service	Spring Boot	支付业务模拟
+auth-service	Spring Boot	登录认证
+
+基础设施：
+组件		作用
+MySQL		持久化数据库
+Redis		缓存
+RabbitMQ	消息队列
+Nginx Ingress	外部流量入口
+Harbor		私有镜像仓库
+Jenkins		自动化构建部署
+Prometheus	指标监控
+Grafana		监控可视化
+Loki / Promtail	日志管理
+注意：这里是教学项目，支付服务只模拟支付流程，不连接真实支付平台。
+
+二、结合你当前的 K8s 集群规划部署
+你目前已经搭建好了三节点 Kubernetes 集群：
+节点		IP		角色
+k8s-master	192.168.79.130	Control Plane
+k8s-node1	你的实际节点 IP	Worker
+k8s-node2	你的实际节点 IP	Worker
+集群版本为 Kubernetes v1.37.2，网络插件为 Calico。
+本次实战继续使用这套集群，不需要重新安装 Kubernetes。
+
+最终部署拓扑
+	Windows 11 客户端
+	浏览器访问电商系统
+		↓
+	Ingress / Gateway
+	HTTP 路由、流量入口
+		↓
+node1		node2		master
+user		order		控制平面
+product		payment		管理组件
+		↓ 
+	MySQL / Redis / RabbitMQ
+	数据存储、缓存、消息通信
+
+监控、日志、CI/CD、镜像仓库作为独立运维体系部署
+这里有个原则：master 主要承担控制平面职责，业务应用优先部署在两个 Worker 节点上。
+后续可以通过节点标签、亲和性和反亲和性控制调度。
+
+三、项目实施分为 10 个阶段
+这次实战内容比较多，我把它拆成十个阶段，每个阶段都要完成实际操作。
+阶段	实施内容			验收目标
+1	Java 微服务项目准备		项目可以本地运行
+2	Dockerfile 容器化		每个服务生成镜像
+3	Harbor 私有仓库		镜像上传成功
+4	K8s Namespace 配置	建立业务隔离环境
+5	MySQL、Redis、RabbitMQ	基础设施正常运行
+6	Java 微服务部署		所有微服务 Running
+7	Service、Ingress		外部能够访问系统
+8	Helm 部署管理		一键安装、升级
+9	Jenkins CI/CD		代码提交自动发布
+10	监控、日志、故障演练	完成项目验收
+
+四、第一阶段：准备 Java 微服务项目
+首先要明确：Kubernetes 不负责开发 Java 程序，它负责运行、管理和调度容器化应用。
+我们的流程是：
+Java 源代码
+    ↓
+Maven 编译打包
+    ↓
+生成 JAR 文件
+    ↓
+Dockerfile 构建镜像
+    ↓
+推送 Harbor 镜像仓库
+    ↓
+Kubernetes 拉取镜像
+    ↓
+Deployment 创建 Pod
+    ↓
+Service 提供服务发现
+    ↓
+Ingress 对外提供访问
+
+
+1. 准备开发环境
+建议在 Windows 11 上准备：
+软件		用途
+JDK 17		Java 开发环境
+IntelliJ IDEA	Java 项目开发
+Maven 3.9.x	项目构建
+Git		代码版本管理
+Docker		镜像构建（也可使用其他 OCI 构建工具）
+Xshell / WinLinuxTool	连接 Linux 集群
+本次课程建议采用 Java 17 + Spring Boot 3.x + Spring Cloud Alibaba（版本需要匹配 Spring Boot 版本）。
+如果你已经有自己的 Java 微服务项目，也可以直接使用自己的项目，不必重新开发。
+
+2. 项目目录结构
+我们先规划项目结构：
+k8s-mall/
+│
+├── gateway-service/
+│   ├── src/
+│   ├── pom.xml
+│   └── Dockerfile
+│
+├── user-service/
+│   ├── src/
+│   ├── pom.xml
+│   └── Dockerfile
+│
+├── product-service/
+│   ├── src/
+│   ├── pom.xml
+│   └── Dockerfile
+│
+├── order-service/
+│   ├── src/
+│   ├── pom.xml
+│   └── Dockerfile
+│
+├── payment-service/
+│   ├── src/
+│   ├── pom.xml
+│   └── Dockerfile
+│
+├── auth-service/
+│   ├── src/
+│   ├── pom.xml
+│   └── Dockerfile
+│
+├── deploy/
+│   ├── mysql/
+│   ├── redis/
+│   ├── rabbitmq/
+│   ├── kubernetes/
+│   └── helm/
+│
+└── Jenkinsfile
+
+
+这就是我们后面持续使用的项目目录。
+3. Java 微服务之间如何通信？
+举个例子：用户在电商系统中购买商品。
+用户提交订单
+	↓
+gateway-service
+统一请求入口
+	↓
+order-service
+创建订单
+product-service	payment-service
+检查商品库存	模拟支付
+	↓
+RabbitMQ
+异步消息通知
+
+在 Kubernetes 中，微服务不需要记住对方 Pod 的 IP 地址。
+例如 order-service 访问 user-service：
+http://user-service:8080
+跨 Namespace 则使用完整 DNS：
+http://user-service.mall:8080
+这是 Kubernetes Service DNS 服务发现机制。
+
+五、第二阶段：Java 项目容器化
+接下来我们将每个 Java 微服务打包成独立 Docker 镜像。
+1. Maven 编译
+在项目目录执行：
+mvn clean package -DskipTests
+编译成功后会生成：
+target/
+    user-service.jar
+
+2. 编写 Dockerfile
+以 user-service 为例：
+FROM eclipse-temurin:17-jre
+
+WORKDIR /app
+
+COPY target/user-service.jar app.jar
+
+EXPOSE 8080
+
+ENTRYPOINT ["java","-jar","app.jar"]
+
+这里使用 JRE 运行环境，不需要把完整 JDK 放入生产运行镜像。
+
+3. 构建镜像
+docker build -t user-service:v1.0 .
+查看镜像：docker images
+
+测试启动：
+docker run -d \
+  --name user-service \
+  -p 8080:8080 \
+  user-service:v1.0
+
+查看运行状态：docker ps
+查看日志：docker logs user-service
+
+注意：这里的 Docker 命令是在有 Docker 环境的构建机上执行。
+你的 Kubernetes 节点使用的是 containerd，不需要为了运行 K8s 容器再安装 Docker Engine。
+
+4. 镜像构建规范
+企业中通常不建议所有服务都使用 latest 标签。
+例如：
+user-service:v1.0
+user-service:v1.1
+user-service:v1.2
+
+order-service:v1.0
+order-service:v1.1
+
+更进一步可以使用 Git Commit SHA 作为镜像标签，实现代码版本和镜像版本一一对应。
+
+六、第三阶段：部署 Harbor 私有镜像仓库
+为什么需要 Harbor？
+因为企业通常不希望每次部署 Java 服务都从 Docker Hub 下载镜像。
+Harbor 可以实现：
+- 私有镜像仓库。
+- 用户权限管理。
+- 镜像漏洞扫描。
+- 镜像版本管理。
+- 镜像复制与同步。
+- 镜像签名及供应链安全能力（需要相应配置）。
+1. Harbor 镜像命名
+假设 Harbor 地址为：
+192.168.79.130:5000
+项目名称为：
+mall
+那么镜像地址：
+192.168.79.130:5000/mall/user-service:v1.0
+192.168.79.130:5000/mall/order-service:v1.0
+192.168.79.130:5000/mall/product-service:v1.0
+注意：这里的地址和端口是本课程的规划示例，实际部署 Harbor 时需要确定其 HTTPS 证书和端口配置。
+
+2. 推送镜像
+docker login 192.168.79.130:5000
+重新标记镜像：
+docker tag user-service:v1.0 \
+192.168.79.130:5000/mall/user-service:v1.0
+推送：
+docker push \
+192.168.79.130:5000/mall/user-service:v1.0
+
+3. Kubernetes 节点拉取私有镜像
+需要在业务 Namespace 创建 Secret：
+kubectl create namespace mall
+kubectl create secret docker-registry harbor-secret \
+  --docker-server=192.168.79.130:5000 \
+  --docker-username=admin \
+  --docker-password='你的Harbor密码' \
+  -n mall
+后面 Deployment 中引用：
+spec:
+  template:
+    spec:
+      imagePullSecrets:
+        - name: harbor-secret
+
+重要：如果 Harbor 使用 HTTP 或自签名证书，还需要在每个可能运行业务 Pod 的 Kubernetes 节点上配置 containerd 信任仓库或 CA 证书。
+不能只在 Docker 客户端登录就认为 K8s 已经可以拉取镜像。
+
+七、第四阶段：Kubernetes 业务 Namespace
+企业中通常会把不同业务放到不同 Namespace。
+本项目规划：
+Namespace	用途
+mall		Java 微服务
+mall-data		MySQL、Redis、RabbitMQ
+monitoring	Prometheus、Grafana
+logging		日志管理
+cicd		Jenkins
+ingress-nginx	Ingress 控制器
+
+创建：
+kubectl create namespace mall
+kubectl create namespace mall-data
+kubectl create namespace monitoring
+kubectl create namespace logging
+kubectl create namespace cicd
+
+检查：kubectl get namespaces
+后续业务 Deployment、Service、ConfigMap、Secret 都要放到对应 Namespace 中。
+
+八、第五阶段：部署 MySQL、Redis、RabbitMQ
+这一步是整个项目的基础设施部署。
+1. MySQL
+企业环境建议使用 StatefulSet + PVC，而不是直接使用普通 Deployment 存放数据库数据。
+结构：
+mysql StatefulSet
+       |
+       v
+mysql Pod
+       |
+       v
+mysql PVC
+       |
+       v
+mysql PV
+       |
+       v
+持久化存储
+
+MySQL 需要重点配置：
+- root 密码使用 Secret。
+- 数据目录挂载 PVC。
+- 数据库初始化脚本。
+- CPU 和内存资源限制。
+- 存活和就绪探针。
+- 定期备份。
+2. Redis
+Redis 用于：
+- 用户登录状态缓存。
+- 商品信息缓存。
+- 热点数据缓存。
+- 分布式锁（需要正确设计）。
+3. RabbitMQ
+RabbitMQ 用于：
+- 订单创建消息。
+- 支付结果通知。
+- 库存异步处理。
+- 微服务之间的事件通信。
+这三个组件的部署都要验证 Service DNS、数据持久化和健康状态。
+检查：
+kubectl get pods -n mall-data
+kubectl get svc -n mall-data
+kubectl get pvc -n mall-data
+
+这里特别提醒：你之前做过 local-path PVC 实验，也遇到过 PVC Terminating 和节点亲和性问题。
+本次数据库部署不能简单认为 PVC Bound 就代表数据已经具备高可用能力。单机本地盘仍然存在节点故障导致数据不可用的风险。
+
+九、第六阶段：部署 Java 微服务
+现在开始把 Java 镜像真正部署到 Kubernetes。
+1. 创建 ConfigMap
+用于存放非敏感配置，例如数据库地址：
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mall-config
+  namespace: mall
+data:
+  MYSQL_HOST: mysql.mall-data.svc.cluster.local
+  MYSQL_PORT: "3306"
+  REDIS_HOST: redis.mall-data.svc.cluster.local
+  REDIS_PORT: "6379"
+  RABBITMQ_HOST: rabbitmq.mall-data.svc.cluster.local
+
+保存为 mall-config.yaml。
+应用：kubectl apply -f mall-config.yaml
+
+2. 创建 Deployment
+以 user-service 为例：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: mall
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      imagePullSecrets:
+        - name: harbor-secret
+      containers:
+        - name: user-service
+          image: 192.168.79.130:5000/mall/user-service:v1.0
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: mall-config
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 15
+
+保存为 user-deployment.yaml。
+注意：
+- Java 项目需要引入 Spring Boot Actuator，并正确启用对应健康检查端点。
+- 如果项目健康检查路径不同，要修改探针。
+- 数据库密码不能放进 ConfigMap，应放入 Secret。
+- 上面两个副本是教学配置，生产部署还要考虑反亲和性和节点容量。
+部署：kubectl apply -f user-deployment.yaml
+检查：kubectl get deployment -n mall
+kubectl get pods -n mall -o wide
+
+3. 创建 Service
+保存为 user-service.yaml：
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: mall
+spec:
+  type: ClusterIP
+  selector:
+    app: user-service
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+应用：kubectl apply -f user-service.yaml
+检查：kubectl get svc -n mall
+
+4. 部署其他微服务
+按照相同方法部署：
+gateway-service
+user-service
+product-service
+order-service
+payment-service
+auth-service
+
+每个服务都有自己的：
+- Deployment
+- Service
+- ConfigMap（可以共享部分公共配置）
+- Secret（需要时使用）
+- 健康检查
+- CPU / Memory 资源配置
+最终检查：kubectl get pods -n mall -o wide
+期望所有服务正常运行。
+
+十、第七阶段：配置 Ingress 对外访问
+我们不希望用户直接访问每个微服务的 NodePort。
+而是通过统一域名访问：mall.example.com
+
+访问关系：
+Windows 浏览器
+       |
+       v
+Ingress Controller
+       |
+       v
+gateway-service
+       |
+       +---- user-service
+       |
+       +---- product-service
+       |
+       +---- order-service
+       |
+       +---- payment-service
+
+创建 Ingress：
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mall-ingress
+  namespace: mall
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: mall.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway-service
+                port:
+                  number: 8080
+
+应用：kubectl apply -f mall-ingress.yaml
+查看：kubectl get ingress -n mall
+Windows 修改 hosts 文件：
+C:\Windows\System32\drivers\etc\hosts
+假设 Ingress 入口使用 master 的 IP：
+192.168.79.130 mall.example.com
+这里还需要根据实际 Ingress Controller 的 Service 类型、监听端口和节点网络配置，确认 80/443 能够访问。
+最后浏览器打开：http://mall.example.com
+
+十一、第八阶段：使用 Helm 统一部署
+你已经安装了 Helm 4.3.0，因此这次不需要重复安装 Helm 3。
+企业中不会长期依赖几十个 YAML 文件手动部署。我们要将项目封装成 Helm Chart。
+
+目录结构：
+mall-chart/
+│
+├── Chart.yaml
+├── values.yaml
+│
+└── templates/
+    ├── namespace.yaml
+    ├── deployment.yaml
+    ├── service.yaml
+    ├── configmap.yaml
+    └── ingress.yaml
+
+1. 创建 Chart
+helm create mall
+
+2. 修改 values.yaml
+例如：
+replicaCount: 2
+
+image:
+  repository: 192.168.79.130:5000/mall/user-service
+  tag: v1.0
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+实际项目要把多个微服务拆分成独立子 Chart，或通过统一的父 Chart 管理。
+
+3. 安装项目
+helm install mall ./mall-chart -n mall --create-namespace
+
+4. 查看安装状态
+helm list -A
+
+5. 升级版本
+helm upgrade mall ./mall-chart \
+  -n mall \
+  --set image.tag=v1.1
+
+6. 回滚
+helm history mall -n mall
+helm rollback mall 1 -n mall
+这里沿用你之前学习的 Helm 4.3.0，不需要为了本课程降级到 Helm 3。
+
+十二、第九阶段：Jenkins + CI/CD 自动化部署
+这一阶段是企业开发运维的核心。
+我们希望实现：开发人员提交代码，系统自动编译、构建镜像、上传镜像、部署 Kubernetes。
+
+完整流程：
+01  Git
+开发人员提交代码
+	↓
+02  Jenkins
+自动触发流水线
+	↓
+03  Maven
+编译 Java 项目、执行测试
+	↓
+04  Docker Build
+构建微服务镜像
+	↓
+05  Harbor
+推送版本化镜像
+	↓
+06  Helm
+升级 Kubernetes 应用
+	↓
+07  Kubernetes
+滚动更新 Pod，等待健康检查
+
+Jenkinsfile 的核心逻辑示例：
+pipeline {
+    agent any
+
+    environment {
+        IMAGE = '192.168.79.130:5000/mall/user-service'
+        VERSION = 'v1.0'
+    }
+
+    stages {
+        stage('拉取代码') {
+            steps {
+                git '你的Git仓库地址'
+            }
+        }
+
+        stage('Maven编译') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('构建镜像') {
+            steps {
+                sh 'docker build -t $IMAGE:$VERSION .'
+            }
+        }
+
+        stage('推送镜像') {
+            steps {
+                sh 'docker push $IMAGE:$VERSION'
+            }
+        }
+
+        stage('部署K8s') {
+            steps {
+                sh '''
+                helm upgrade --install mall-user ./deploy/helm/user-service \
+                  -n mall \
+                  --set image.repository=$IMAGE \
+                  --set image.tag=$VERSION
+                '''
+            }
+        }
+    }
+}
+
+这是教学流程骨架。真正运行前，还要配置 Git 凭据、Harbor 凭据、构建节点的容器构建工具，以及 Jenkins 到 Kubernetes 的受限访问权限。
+不要直接把集群管理员 kubeconfig 放进 Jenkins。
+
+十三、第十阶段：Prometheus + Grafana + 日志监控
+项目部署成功，不代表项目已经具备企业运维能力。
+我们还需要知道：
+- Pod 是否频繁重启？
+- Java 服务 CPU 是否过高？
+- 内存是否即将耗尽？
+- 节点磁盘是否不足？
+- 请求是否出现大量 500 错误？
+- 数据库是否连接失败？
+- RabbitMQ 消息是否积压？
+主要组件：
+组件		监控职责
+Prometheus	指标采集
+Grafana		指标可视化
+Alertmanager	告警通知
+Node Exporter	Linux 节点指标
+kube-state-metrics	K8s 资源状态
+Loki		日志存储
+Promtail / Alloy	日志采集
+
+重点命令：
+kubectl get pods -n monitoring
+kubectl top nodes
+kubectl top pods -A
+kubectl get events -A --sort-by=.lastTimestamp
+最终要实现业务监控、集群监控、日志查询和异常告警。
+
+十四、项目上线验收
+这次不能以 Pod 显示 Running 就宣布项目成功。
+我们要模拟企业上线验收。
+验收项目		验收标准
+Java 微服务	所有服务正常运行
+数据库		数据写入、读取成功
+Redis		缓存读写成功
+RabbitMQ	消息发送、消费成功
+服务发现		微服务通过 Service DNS 通信
+Ingress		浏览器能够访问系统
+镜像仓库		镜像可以正常拉取
+Helm		可以安装、升级、回滚
+Jenkins		代码提交能够触发发布
+监控		能够查看 CPU、内存和 Pod 状态
+日志		能够定位 Java 异常
+故障恢复		删除 Pod 后能够自动重建
+
+必须进行的故障演练
+实验1：删除一个 Java Pod
+kubectl delete pod <pod名称> -n mall
+观察 Deployment 是否自动创建新 Pod。
+
+实验2：扩容订单服务
+kubectl scale deployment order-service \
+  --replicas=4 -n mall
+
+实验3：模拟镜像更新失败
+使用一个不存在的镜像标签，观察 ImagePullBackOff 和事件信息，然后恢复正确版本。
+
+实验4：滚动更新和回滚
+kubectl rollout status deployment/user-service -n mall
+kubectl rollout history deployment/user-service -n mall
+kubectl rollout undo deployment/user-service -n mall
+
+实验5：模拟 Worker 节点故障
+先确认业务副本和节点分布，再通过受控的维护操作模拟节点不可用，观察 Pod 调度和服务可用性。
+注意：单副本数据库不会因为 Pod 自动重建就自动具备数据高可用。企业数据库还需要备份、复制、故障切换和恢复演练。
+
+十五、针对你的 VMware 三节点环境，需要注意什么？
+这里我特别提醒一下。你现在使用的是 VMware 虚拟机，只有三个 K8s 节点，而且 master 主要负责控制平面。
+本次不要一上来就把所有企业组件全部安装进去。
+
+建议按照下面顺序：
+优先级	组件			安装建议
+第一批	Java 微服务、MySQL	先完成核心业务
+第二批	Redis、RabbitMQ		再部署中间件
+第三批	Harbor、Jenkins		建立镜像和自动化体系
+第四批	Prometheus、Grafana	最后部署完整监控
+
+特别是 Prometheus、Jenkins、Harbor、MySQL 都可能占用较多内存和磁盘。
+先检查集群资源：
+kubectl get nodes -o wide
+kubectl describe nodes
+kubectl top nodes
+另外，Harbor 和 Jenkins 完全可以先部署在 K8s 集群之外的独立虚拟机或 Windows/Linux 构建机上，避免把集群资源一次性耗尽。
+本课程的生产化目标是学习企业架构和部署流程，而不是把 VMware 三节点实验环境直接当成真正的生产环境。
+
+十六、第29课实战作业
+这次建议你不要只看教程，要真正动手完成。
+第29课任务清单
+完成进度：0/14
+0%
+[ ] 确认三节点集群正常，检查 CPU、内存和磁盘资源
+[ ] 准备 Java 微服务项目，完成 Maven 编译
+[ ] 为 Java 微服务编写 Dockerfile
+[ ] 构建 Java 镜像并测试运行
+[ ] 部署 Harbor 私有镜像仓库
+[ ] 将业务镜像推送到 Harbor
+[ ] 创建 mall、mall-data 等 Namespace
+[ ] 部署 MySQL、Redis、RabbitMQ
+[ ] 部署 Java 微服务 Deployment 和 Service
+[ ] 配置 Ingress，实现浏览器访问
+[ ] 使用 Helm 管理微服务
+[ ] 使用 Jenkins 实现 CI/CD 自动部署
+[ ] 部署 Prometheus、Grafana 和日志系统
+[ ] 完成 Pod 删除、扩容、滚动更新和回滚实验

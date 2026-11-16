@@ -1,0 +1,83 @@
+基本格式：
+grep [参数] "搜索内容" [文件名或路径]
+
+1. 常用参数速查
+参数	简要说明
+-i	忽略大小写
+-n	显示匹配内容所在行号
+-v	反向匹配，显示不包含关键字的行
+-c	统计匹配的行数
+-o	只显示匹配到的内容
+-l	只显示包含匹配内容的文件名
+-L	显示不包含匹配内容的文件名
+-r	递归搜索目录
+-R	递归搜索，跟随符号链接
+-w	匹配完整单词
+-x	匹配完整的一整行
+-E	使用扩展正则表达式
+-F	使用固定字符串匹配，不解析正则
+-A N	显示匹配行及后面N行
+-B N	显示匹配行及前面N行
+-C N	显示匹配行及前后N行
+-m N	每个文件最多匹配N行
+-q	静默搜索，不输出匹配内容
+-s	隐藏错误信息
+-h	不显示文件名前缀
+-H	显示文件名前缀
+-a	将二进制文件按文本处理
+-P	使用Perl兼容正则表达式
+
+2. 常用操作示例
+简要名称		命令示例				命令说明
+搜索关键字	grep "error" app.log		搜索包含error的行
+忽略大小写	grep -i "error" app.log		不区分大小写搜索
+显示行号		grep -n "error" app.log		显示匹配行号
+反向匹配		grep -v "INFO" app.log		显示不包含INFO的行
+统计匹配行	grep -c "ERROR" app.log		统计包含ERROR的行数
+递归搜索		grep -rn "error" /var/log/		递归搜索目录中的关键字
+精确单词		grep -w "root" users.txt		匹配完整单词root
+整行匹配		grep -x "root" users.txt		只匹配内容完全为root的行
+提取匹配内容	grep -o "[0-9]\+" app.log		只输出匹配到的数字
+多关键字搜索	grep -E "error\|warning" app.log	同时搜索error和warning
+显示前后内容	grep -C 3 "ERROR" app.log		显示匹配行前后各3行
+显示后面内容	grep -A 3 "ERROR" app.log		显示匹配行后面3行
+显示前面内容	grep -B 3 "ERROR" app.log		显示匹配行前面3行
+查找匹配文件	grep -rl "ERROR" /var/log/		显示包含ERROR的文件名
+排除指定文件	grep -rn --exclude="*.log" "ERROR" /var/log/	搜索时排除.log文件
+实时搜索日志	tail -f app.log \| grep --line-buffered "ERROR"	实时监控错误日志
+
+3. 常用正则表达式
+符号	简要说明			示例
+^	匹配行首			grep '^root' users.txt
+$	匹配行尾			grep 'bash$' users.txt
+.	匹配任意单个字符		grep 'r..t' users.txt
+*	前一个字符重复0次或多次	grep 'ab*c' test.txt
++	前一个字符重复1次或多次	grep -E 'ab+c' test.txt
+?	前一个字符出现0次或1次	grep -E 'colou?r' test.txt
+[]	匹配指定字符集合		grep '[0-9]' test.txt
+[^]	匹配不在指定集合中的字符	grep '[^0-9]' test.txt
+\|	或者（基本正则）		grep 'error\|warning' app.log
+()	正则分组（扩展正则）	grep -E '(error\|warning)' app.log
+
+4. grep 返回值
+返回值	含义
+0	找到匹配内容
+1	没有找到匹配内容
+2	搜索发生错误
+
+查看返回值：
+grep -q "ERROR" app.log
+echo $?
+
+5. 高频参数记忆
+grep 高频参数，优先掌握这9个参数，基本可以应付日常日志搜索和文本过滤。
+记忆口诀：
+- -i：忽略大小写
+- -n：显示行号
+- -v：反向过滤
+- -r：递归搜索
+- -c：统计行数
+- -o：只看匹配内容
+- -l：只看文件名
+- -w：精确单词
+- -E：扩展正则

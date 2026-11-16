@@ -1,0 +1,444 @@
+这一课我们正式进入 Kubernetes 的网络安全管理。Kubernetes 集群内部的 Pod 默认可以互相通信，如果某个 Pod 被入侵，
+攻击者可能进一步访问其他 Pod，应该如何限制这种访问？这就是 NetworkPolicy（网络策略）要解决的问题。
+本节使用你目前的 Rocky Linux 9.8 + Kubernetes v1.37.2 + Calico 三节点集群进行实验。
+
+一、理解 Kubernetes 默认网络模型
+先理解一个重要概念：Kubernetes 默认采用比较开放的 Pod 网络模型。
+假设集群里面有三个 Pod：默认 Pod 网络通信
+Pod A：前端 Nginx  10.244.1.10
+Pod B：Java   10.244.2.10
+Pod C：MySQL  10.244.2.20
+默认情况下，Pod 之间可以直接通信
+前提是网络插件和网络本身允许通信，且目标端口有服务监听。
+
+例如：
+- Nginx 可以访问 Java。
+- Nginx 也可能直接访问 MySQL。
+- Java 可以访问 MySQL。
+- 其他 Pod 也可能访问 MySQL。
+这就产生了安全问题。
+实际生产环境中，我们通常希望：
+来源	目标	是否允许
+Nginx	Java	允许
+Nginx	MySQL	禁止
+Java	MySQL	允许
+其他 Pod	MySQL	禁止
+
+这就是 NetworkPolicy 的用途。
+
+二、什么是 NetworkPolicy？
+NetworkPolicy 翻译过来就是网络策略。
+它是 Kubernetes 提供的一种网络访问控制机制，可以控制：
+1. 哪些 Pod 可以访问当前 Pod。
+2. 当前 Pod 可以访问哪些其他 Pod。
+3. 哪些 Namespace 可以访问当前 Pod。
+4. 允许访问哪些 IP 地址。
+5. 允许访问哪些端口和协议。
+简单理解：NetworkPolicy 就相当于 Kubernetes 集群内部的防火墙规则。
+
+注意两个概念：
+- Ingress：进入 Pod 的流量。
+- Egress：从 Pod 发出的流量。
+
+NetworkPolicy 流量方向：
+	↓	↑
+Ingress 入站	Egress 出站
+外部 Pod		当前 Pod
+访问目标 Pod	访问其他目标
+控制谁能进来	控制能访问谁
+
+三、NetworkPolicy 的基本结构
+先看一个标准 YAML：
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+
+metadata:
+  name: nginx-policy
+  namespace: default
+
+spec:
+  podSelector:
+    matchLabels:
+      app: nginx
+
+  policyTypes:
+  - Ingress
+
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: java
+
+    ports:
+    - protocol: TCP
+      port: 80
+
+逐个解释：
+配置		作用
+kind		定义资源类型
+metadata.name	策略名称
+namespace	策略所在命名空间
+podSelector	指定保护哪些 Pod
+policyTypes	声明控制入站还是出站
+ingress		入站规则
+from		允许哪些来源
+ports		允许访问哪些端口
+
+这份配置的含义：
+只有标签为 app=java 的 Pod，才能通过 TCP 80 端口访问标签为 app=nginx 的 Pod。
+其他 Pod 访问 nginx 的 TCP 80 端口将被拒绝。
+
+注意：NetworkPolicy 不是直接指定某个 Pod 的名字，而是通过 Label 标签选择 Pod。
+四、实验环境准备
+我们开始实战。
+先检查集群：kubectl get nodes
+查看 Calico：kubectl get pods -n calico-system
+如果你的 Calico 版本使用其他命名空间，也可以先查看：
+kubectl get pods -A | grep calico
+
+为什么这里要特别检查 Calico？
+因为你目前使用的 Calico 是 Kubernetes 网络插件，它支持 NetworkPolicy。
+重要知识点：NetworkPolicy 只是 Kubernetes 的策略声明，真正执行规则的是支持 NetworkPolicy 的网络插件。
+并不是所有 CNI 插件都支持 NetworkPolicy。
+
+五、实战一：创建测试环境
+我们创建三个 Pod：
+Pod 名称		标签		作用
+nginx		app=nginx	被保护的 Web 服务
+java-client	app=java		允许访问 nginx
+other-client	app=other	不允许访问 nginx
+
+1. 创建 Nginx Deployment 和 Service
+创建配置文件：
+cat > /root/network-test.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  selector:
+    app: nginx
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: java-client
+  labels:
+    app: java
+spec:
+  containers:
+  - name: client
+    image: busybox:1.36
+    command: ["sh", "-c", "sleep 36000"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: other-client
+  labels:
+    app: other
+spec:
+  containers:
+  - name: client
+    image: busybox:1.36
+    command: ["sh", "-c", "sleep 36000"]
+EOF
+
+
+执行：kubectl apply -f /root/network-test.yaml
+查看：kubectl get pods -o wide
+查看 Service：kubectl get svc
+等待三个 Pod 都变成 Running。
+
+2. 测试默认网络通信
+先让 java-client 访问 Nginx：kubectl exec java-client -- wget -T 5 -qO- http://nginx-service
+再让 other-client 访问：kubectl exec other-client -- wget -T 5 -qO- http://nginx-service
+正常情况下，两次都能返回 Nginx 欢迎页面 HTML。
+实验预期
+ 两个客户端都能访问。
+为什么？
+因为我们还没有配置 NetworkPolicy，默认情况下没有被策略隔离的 Pod 可以正常通信。
+
+六、实战二：限制只有 Java 能访问 Nginx
+现在开始创建第一条网络策略。创建文件：
+cat > /root/nginx-policy.yaml <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nginx-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: nginx
+
+  policyTypes:
+  - Ingress
+
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: java
+    ports:
+    - protocol: TCP
+      port: 80
+EOF
+
+应用策略：kubectl apply -f /root/nginx-policy.yaml
+查看：kubectl get networkpolicy
+也可以：kubectl describe networkpolicy nginx-policy
+
+1. 再次测试 Java
+kubectl exec java-client -- wget -T 5 -qO- http://nginx-service
+预期：访问成功
+因为 java-client 的标签为：
+labels:
+  app: java
+符合 NetworkPolicy 的允许条件。
+
+2. 再次测试 Other
+kubectl exec other-client -- wget -T 5 -qO- http://nginx-service
+预期：访问失败
+通常会出现连接超时。
+原因：
+other-client 的标签是：
+labels:
+  app: other
+不符合允许访问的条件。
+
+这样我们就实现了：
+- Java 可以访问 Nginx。
+- Other 不可以访问 Nginx。
+这就是 NetworkPolicy 最核心的应用场景。
+
+七、实战三：默认拒绝所有入站流量
+前面的实验是指定哪些来源可以访问。
+生产环境还有一种更严格的方式：
+默认拒绝所有进入某个 Pod 的流量，只允许明确放行的流量。
+
+创建配置：
+cat > /root/default-deny.yaml <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+EOF
+
+应用：kubectl apply -f /root/default-deny.yaml
+这里最重要的是：podSelector: {}
+它表示选择当前 Namespace 中的所有 Pod。
+
+结合：
+policyTypes:
+- Ingress
+
+
+就表示当前 Namespace 所有 Pod 都启用入站隔离。
+但是注意：我们之前创建的 nginx-policy 仍然存在。
+Kubernetes NetworkPolicy 有一个重要规则：
+多个 NetworkPolicy 的允许规则是累加的（取并集），不是后创建的策略覆盖先创建的策略。
+
+因此：
+- Nginx 仍然允许 Java 访问。
+- 其他来源仍然不能访问 Nginx。
+- 其他没有额外放行规则的 Pod，其入站流量也会被默认拒绝。
+如果你想恢复默认开放状态，可以删除这条策略：
+kubectl delete networkpolicy default-deny-ingress
+
+
+八、实战四：限制 Pod 的出站流量 Egress
+前面我们主要限制别人访问 Pod。现在换一个方向：
+假设 Java Pod 只能访问 MySQL 的 3306 端口，不能随意访问其他服务。
+这就是 Egress 出站策略。
+
+示例：
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: java-egress-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: java
+
+  policyTypes:
+  - Egress
+
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: mysql
+    ports:
+    - protocol: TCP
+      port: 3306
+
+
+含义：
+只有符合 app=mysql 标签的目标 Pod，其 TCP 3306 端口允许被 Java Pod 访问。
+
+注意一个很容易踩的坑：
+启用 Egress 隔离后，未被允许的出站流量会被拒绝，包括 DNS 查询。
+如果需要 Java 继续使用 Kubernetes Service 域名，就要额外允许 DNS 流量，例如：
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+这里是一个 Egress 规则片段，需要放在 egress 列表中，与前面的规则同级。
+另外，NetworkPolicy 的规则是允许列表机制，出站流量能否成功还要考虑目标 Pod 的 Ingress 策略。
+
+九、NetworkPolicy 常用匹配方式
+这是本课非常重要的知识点。
+NetworkPolicy 不仅能通过 Pod 标签控制访问，还可以通过 Namespace、IP 地址等方式进行控制。
+1. podSelector：根据 Pod 标签匹配
+from:
+- podSelector:
+    matchLabels:
+      app: java
+含义：允许当前 Namespace 内标签为 app=java 的 Pod。
+
+2. namespaceSelector：根据 Namespace 匹配
+from:
+- namespaceSelector:
+    matchLabels:
+      environment: production
+含义：允许标签为 environment=production 的 Namespace 中的 Pod。
+
+3. 同时匹配 Namespace 和 Pod
+from:
+- namespaceSelector:
+    matchLabels:
+      environment: production
+  podSelector:
+    matchLabels:
+      app: java
+注意这里两个选择器写在同一个列表项中，表示 AND 关系：
+必须同时满足：
+- Namespace 标签为 production。
+- Pod 标签为 app=java。
+如果写成两个独立列表项，则是 OR 关系。
+
+4. ipBlock：根据 IP 地址匹配
+from:
+- ipBlock:
+    cidr: 192.168.79.0/24
+含义：允许来自这个 IP 网段的流量。
+也可以排除某些地址：
+from:
+- ipBlock:
+    cidr: 192.168.79.0/24
+    except:
+    - 192.168.79.130/32
+这里排除了 192.168.79.130。
+注意：ipBlock 通常用于集群外部 IP 范围的访问控制。经过 NAT、代理或负载均衡器的流量，实际看到的源 IP 可能发生变化。
+
+十、NetworkPolicy 的几个重要注意事项
+这部分建议认真记下来，实际部署时很容易踩坑。
+1. NetworkPolicy 不会自动创建防火墙
+它只是声明规则，需要 Calico、Cilium 等支持策略的 CNI 插件执行。
+2. 策略具有 Namespace 隔离范围
+一条 NetworkPolicy 只能选择自己所在 Namespace 的 Pod，不能直接通过 podSelector 选择其他 Namespace 的 Pod。
+3. 多条策略是累加关系
+假设有两条策略：
+- 第一条允许 Java 访问 Nginx。
+- 第二条允许 Python 访问 Nginx。
+那么 Java 和 Python 都能访问 Nginx。
+不会因为第二条策略出现，就覆盖第一条。
+4. 入站和出站是独立控制的
+例如：
+- Nginx 允许 Java 入站。
+- Java 却禁止所有出站。
+那么 Java 仍然无法访问 Nginx。
+因为通信需要同时满足发送方 Egress 和接收方 Ingress 的限制（如果双方都启用了相应隔离）。
+5. NetworkPolicy 不等于完整的集群安全体系
+它主要控制 Pod 网络流量，不能代替：
+- RBAC 身份权限管理。
+- Secret 敏感信息保护。
+- TLS 加密。
+- Pod Security Standards。
+- Linux SecurityContext。
+- 镜像安全扫描。
+这些也是后续需要学习的内容。
+
+十一、NetworkPolicy 常用管理命令
+命令			作用
+kubectl get networkpolicy	查看网络策略
+kubectl get netpol		简写查看网络策略
+kubectl describe netpol nginx-policy	查看策略详情
+kubectl apply -f policy.yaml	创建或更新策略
+kubectl delete netpol nginx-policy	删除指定策略
+kubectl delete -f policy.yaml	按文件删除策略
+kubectl get netpol -A	查看所有命名空间策略
+kubectl get netpol -o yaml	查看策略 YAML
+
+十二、实战练习：自己完成三道题
+学完后建议不要只看，要亲自操作。
+第14课实战任务
+0/3 已完成
+[ ] 练习1：只允许 Java 访问 Nginx
+创建 NetworkPolicy，只允许 app=java 的 Pod 通过 TCP 80 访问 app=nginx。使用 other-client 验证访问失败。
+[ ] 练习2：默认拒绝入站流量
+创建 default-deny 策略，禁止当前 Namespace 所有 Pod 的非允许入站流量，再测试策略效果。
+[ ] 练习3：允许 Java 访问 MySQL
+创建 Egress 策略，只允许 app=java 的 Pod 访问 app=mysql 的 TCP 3306 端口，并考虑 DNS 解析问题。
+
+十三、本课知识总结
+今天需要掌握的核心知识：
+知识点		需要掌握的内容
+NetworkPolicy	Kubernetes 网络访问控制
+Ingress		控制进入 Pod 的流量
+Egress		控制 Pod 发出的流量
+podSelector	根据 Pod 标签匹配
+namespaceSelector	根据 Namespace 匹配
+ipBlock		根据 IP 网段匹配
+Default Deny	默认拒绝策略
+Calico		执行网络策略的 CNI 插件
+多策略规则	允许规则取并集
+到这里，你已经掌握 Kubernetes 从应用部署、存储、调度、弹性伸缩、权限管理到网络隔离的主要基础知识。
+
+十四、实验环境清理
+本课实验结束后，可以执行：
+kubectl delete networkpolicy --all
+kubectl delete deployment nginx
+kubectl delete service nginx-service
+kubectl delete pod java-client other-client
+这里的 kubectl delete networkpolicy --all 只删除当前 Namespace 的 NetworkPolicy，不会删除其他系统资源。
+
+查看清理结果：
+kubectl get pods
+kubectl get svc
+kubectl get networkpolicy
+注意：不要删除系统默认的 kubernetes Service。

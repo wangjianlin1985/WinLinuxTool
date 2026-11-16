@@ -1,0 +1,942 @@
+本节在前面 Hadoop 3.5.0、HDFS、YARN 环境的基础上安装 Spark 4.0.5。
+这次按照后续能够扩展到真正分布式集群的方式配置，不使用 localhost，统一使用 master 主机名。
+
+一、本节部署规划
+Linux 服务器主要运行环境
+操作系统	Rocky Linux 9.8
+主机名	master
+IP 地址	192.168.79.10
+安装用户	dsj_admin
+Hadoop	3.5.0
+Spark	4.0.5
+Java	JDK 17
+JAVA_HOME	/usr/local/bigdata/jdk
+Python	/usr/bin/python3
+
+安装目录	/usr/local/bigdata
+Spark 安装目录
+/usr/local/bigdata/
+├── jdk -> JDK实际目录
+├── hadoop -> Hadoop实际目录
+├── spark-4.0.5/
+└── spark -> spark-4.0.5
+
+
+运行模式：
+1. YARN 模式（默认）
+   Windows 开发 PySpark，通过 SSH 远程提交到 Linux，由 YARN 调度运行。
+2. Local 模式
+   local[*]，在本机进程中运行，适合测试。
+3. Standalone 模式
+   spark://master:7077，使用 Spark 自带的 Master、Worker。
+
+本节会把三种模式的参数都放进同一份配置文件，按需注释切换，不需要维护三套配置文件
+
+二、检查基础环境【过】
+以下命令均在 Linux 的 master 上执行。
+1. 检查 Java
+java -version
+echo $JAVA_HOME
+要求 JDK 17。
+ls -ld /usr/local/bigdata/jdk
+
+2. 检查 Python
+/usr/bin/python3 --version
+Spark 4.0 系列要求 Python 3.9 及以上。
+
+3. 检查 Hadoop 和 YARN
+hadoop version
+yarn version
+检查 Hadoop 配置目录：
+ls /usr/local/bigdata/hadoop/etc/hadoop
+检查 YARN 节点：
+yarn node -list
+检查 HDFS：
+hdfs dfs -ls /
+确保 HDFS 和 YARN 已经正常启动。
+
+三、下载并安装 Spark 4.0.5
+Spark 采用官方 Hadoop 3 预编译发行包。
+进入安装目录：cd /usr/local/bigdata
+下载：wget https://archive.apache.org/dist/spark/spark-4.0.5/spark-4.0.5-bin-hadoop3.tgz
+解压：tar -zxvf spark-4.0.5-bin-hadoop3.tgz
+解压完成后，重命名目录为：/usr/local/bigdata/spark-4.0.5
+创建统一软链接：ln -sfn /usr/local/bigdata/spark-4.0.5 /usr/local/bigdata/spark
+检查：ls -l /usr/local/bigdata/spark
+
+以后升级 Spark，只需要：
+1. 解压新版本。
+2. 修改 spark 软链接指向。
+3. 不需要修改环境变量和配置文件中的 Spark 路径。
+例如：ln -sfn /usr/local/bigdata/spark-4.1.0 /usr/local/bigdata/spark
+
+四、配置 Spark 环境变量
+1. 修改统一环境变量文件
+编辑：vi /etc/profile.d/bigdata.sh
+
+在原有 Hadoop、Java 环境变量后面增加：
+# ==========================================
+# Spark Environment
+# ==========================================
+
+export SPARK_HOME=/usr/local/bigdata/spark
+
+# Add Spark to PATH
+export PATH=$SPARK_HOME/bin:$SPARK_HOME/sbin:$PATH
+
+这里不需要写死 spark-4.0.5，统一通过软链接访问。
+加载配置：source /etc/profile.d/bigdata.sh
+检查：
+echo $SPARK_HOME
+which spark-submit
+预期：
+/usr/local/bigdata/spark
+/usr/local/bigdata/spark/bin/spark-submit
+
+2. 创建 Spark 配置文件
+进入配置目录：cd $SPARK_HOME/conf
+
+复制模板：
+cp spark-env.sh.template spark-env.sh
+cp spark-defaults.conf.template spark-defaults.conf
+
+五、配置 spark-env.sh
+编辑：vi $SPARK_HOME/conf/spark-env.sh
+这份文件主要负责 Spark 的运行环境、Java、Python、Hadoop 配置，以及 Standalone 集群的节点参数。
+建议统一配置如下：
+
+# ==========================================
+# Spark Common Environment
+# ==========================================
+
+# Java
+export JAVA_HOME=/usr/local/bigdata/jdk
+
+# Hadoop Configuration
+export HADOOP_HOME=/usr/local/bigdata/hadoop
+export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+export YARN_CONF_DIR=$HADOOP_HOME/etc/hadoop
+
+# Python
+export PYSPARK_PYTHON=/usr/bin/python3
+export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+
+# ==========================================
+# Spark Standalone Configuration
+# 仅使用 Standalone 模式时启用
+# ==========================================
+
+# export SPARK_MASTER_HOST=master
+# export SPARK_MASTER_PORT=7077
+# export SPARK_MASTER_WEBUI_PORT=8080
+
+# export SPARK_WORKER_CORES=2
+# export SPARK_WORKER_MEMORY=2g
+# export SPARK_WORKER_WEBUI_PORT=8081
+
+# ==========================================
+# Spark Network Configuration
+# ==========================================
+
+# export SPARK_LOCAL_IP=192.168.79.10
+# export SPARK_PUBLIC_DNS=master
+
+
+这里有几个地方需要理解：
+参数			作用
+JAVA_HOME		Spark 使用的 Java
+HADOOP_HOME		Hadoop 安装目录
+HADOOP_CONF_DIR	Hadoop 配置文件目录
+YARN_CONF_DIR		YARN 配置文件目录
+PYSPARK_PYTHON		Executor 使用的 Python
+PYSPARK_DRIVER_PYTHON	Driver 使用的 Python
+SPARK_MASTER_HOST	Standalone Master 主机名
+SPARK_WORKER_CORES	Standalone Worker 可用 CPU 核数
+SPARK_WORKER_MEMORY	Standalone Worker 可用内存
+
+注意：
+SPARK_MASTER_HOST、SPARK_WORKER_CORES 等参数属于 Standalone 模式，YARN 模式不需要启用。
+另外，spark-env.sh 中的环境变量不会自动替代所有 YARN Cluster 模式下的容器环境变量，后面还会在 spark-defaults.conf 中配置 Python 环境。
+
+六、配置 spark-defaults.conf
+这是本节比较重要的一份配置文件。
+我们把三种模式的参数放在同一个文件中：
+- Local 模式：默认全部注释。
+- YARN 模式：默认启用。
+- Standalone 模式：默认全部注释。
+以后切换模式，只需要修改这里的注释即可。
+
+编辑：vi $SPARK_HOME/conf/spark-defaults.conf
+写入以下完整配置：
+
+# ==========================================
+# Spark Common Configuration
+# ==========================================
+
+# Event Log
+spark.eventLog.enabled                  false
+
+# Python
+spark.pyspark.python                     /usr/bin/python3
+spark.pyspark.driver.python              /usr/bin/python3
+
+# Resource
+spark.executor.cores                     1
+spark.executor.memory                    1g
+spark.driver.memory                      1g
+
+# ==========================================
+# 1. Local Mode
+# 本地测试模式
+# ==========================================
+
+# spark.master                           local[*]
+
+
+# ==========================================
+# 2. YARN Mode
+# 默认使用 YARN 模式
+# ==========================================
+
+spark.master                             yarn
+spark.submit.deployMode                  client
+
+# Python Environment for YARN
+spark.yarn.appMasterEnv.PYSPARK_PYTHON   /usr/bin/python3
+spark.yarn.appMasterEnv.PYSPARK_DRIVER_PYTHON /usr/bin/python3
+
+# ==========================================
+# 3. Standalone Mode
+# Spark 自带 Master / Worker
+# ==========================================
+
+# spark.master                           spark://master:7077
+
+# spark.submit.deployMode                client
+
+
+
+这里解释几个关键参数。
+
+1. spark.master
+决定 Spark 使用哪一种运行模式：
+参数	模式
+local[*]	Local
+yarn	YARN
+spark://master:7077	Standalone
+
+2. spark.submit.deployMode
+决定 Driver 的运行位置：
+参数	作用
+client	Driver 在提交客户端运行
+cluster	Driver 在集群容器中运行
+
+本节默认使用 YARN Client 模式。
+因为我们采用 Windows 开发、SSH 远程提交的方式，所以实际提交命令会在 Linux master 上执行，Driver 也运行在 Linux 上。
+
+3. 为什么配置两个 Python 环境？
+spark.pyspark.python
+spark.pyspark.driver.python
+它们分别指定 Executor 和 Driver 使用的 Python。
+
+另外：
+spark.yarn.appMasterEnv.PYSPARK_PYTHON
+spark.yarn.appMasterEnv.PYSPARK_DRIVER_PYTHON
+用于 YARN ApplicationMaster 环境，尤其是以后切换到 YARN Cluster 模式时，需要正确设置容器中的 Python 环境。
+
+Spark 配置文件支持通过命令行参数覆盖默认配置，所以以后也可以通过 --master 和 --deploy-mode 临时切换，不必每次修改配置文件。
+
+
+七、配置 Standalone Worker 节点
+虽然本节默认使用 YARN，但我们保留 Standalone 模式的配置。
+编辑：vi $SPARK_HOME/conf/workers
+写入：master
+
+说明：
+- 这个文件记录 Standalone 模式下启动 Worker 的节点。
+- 当前伪分布式只有一台机器，所以填写 master。
+- 将来扩展到多节点时，可以增加 worker1、worker2。
+注意：workers 文件不会影响 YARN 模式。
+
+八、设置配置文件权限
+确保安装用户 dsj_admin 能够访问 Spark：
+chown -R dsj_admin:dsj_admin /usr/local/bigdata/spark-4.0.5
+配置脚本执行权限：
+chmod +x $SPARK_HOME/conf/spark-env.sh
+
+检查配置文件：
+ls -l $SPARK_HOME/conf/
+重点确认：
+spark-env.sh
+spark-defaults.conf
+workers
+
+
+九、检查 Spark 安装
+重新加载环境变量：source /etc/profile.d/bigdata.sh
+查看 Spark 版本：spark-submit --version
+预期能看到：version 4.0.5
+检查 Java：
+echo $JAVA_HOME
+java -version
+检查 Python：
+$PYSPARK_PYTHON --version
+检查 Hadoop 配置：
+echo $HADOOP_CONF_DIR
+echo $YARN_CONF_DIR【实测这个默认终端shell没有也不影响】
+应该分别指向：
+/usr/local/bigdata/hadoop/etc/hadoop
+/usr/local/bigdata/hadoop/etc/hadoop
+
+十、测试 Spark on YARN
+先确认 Hadoop 服务已经启动：
+jps
+检查 YARN：yarn node -list
+检查 HDFS 用户目录：
+hdfs dfs -ls /user/dsj_admin
+如果目录不存在，可以创建：
+hdfs dfs -mkdir -p /user/dsj_admin
+
+使用 Spark 自带的 SparkPi 示例测试：
+spark-submit \
+--class org.apache.spark.examples.SparkPi \
+$SPARK_HOME/examples/jars/spark-examples_2.13-4.0.5.jar \
+10
+
+这里不需要再指定 --master yarn，因为我们已经在 spark-defaults.conf 中配置了：
+spark.master yarn
+运行期间另开一个终端：yarn application -list
+查看应用状态。
+也可以打开 YARN Web UI：
+ResourceManager Web UI
+http://master:8088 或者http://192.168.79.10:8088
+如果 Windows 无法解析 master，可以在 Windows 的 hosts 文件中添加：
+192.168.79.10 master
+SparkPi 成功运行后，说明 Spark 已经能够通过 YARN 调度执行任务。
+
+十一、三种运行模式如何切换？
+启动spark standalone模式修改：/usr/local/bigdata/spark-4.0.5/conf/spark-env.sh  打开其中其中spark standalone的配置的注释
+Standalone 模式还需要启动 Spark 自带的 Master、Worker 服务。
+例如：
+$SPARK_HOME/sbin/start-master.sh
+$SPARK_HOME/sbin/start-workers.sh
+停止：
+$SPARK_HOME/sbin/stop-workers.sh
+$SPARK_HOME/sbin/stop-master.sh
+
+模式修改：/usr/local/bigdata/spark-4.0.5/conf/spark-defaults.conf  用什么模式就打开对应模式的注释
+重要：三种模式的参数虽然放在同一份配置文件里，但同一时间只能启用一个 spark.master。不要同时取消三种模式的注释。
+
+另外，命令行参数优先级高于 spark-defaults.conf，因此也可以临时指定：
+spark-submit --master local[*] ...
+
+不需要修改默认的 YARN 配置。
+
+十二、Windows 开发 PySpark，远程提交 Linux
+Windows 不需要安装：
+- JDK
+- Python
+- Spark
+- Hadoop
+Windows 只负责开发和文件传输，实际运行环境全部在 Linux。
+
+例如，Windows 编写：
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder \
+    .appName("PySparkTest") \
+    .getOrCreate()
+
+data = [(1, "张三"), (2, "李四"), (3, "王五")]
+
+df = spark.createDataFrame(data, ["id", "name"])
+
+df.show()
+
+spark.stop()
+
+通过 SFTP 将文件上传到 Linux，例如：
+/home/dsj_admin/pyspark/test.py
+
+
+然后通过 SSH 在 Linux 上执行：
+spark-submit /home/dsj_admin/pyspark/test.py
+
+由于默认配置是 YARN，程序会自动提交到 YARN。
+这里使用的是 YARN Client 模式，Driver 在 Linux master 上运行，而不是 Windows 上运行。
+这就实现了 Windows 开发、Linux 运行、YARN 调度。
+
+十五、编写 Spark 五种模式综合测试程序
+这里测试五种场景：
+编号	测试模式	Spark Master	Driver 位置
+1	Local 单线程	local	本地
+2	Local 多线程	local[*]	本地
+3	YARN Client	yarn	Linux master
+4	YARN Cluster	yarn	YARN 容器
+5	Standalone Client	spark://master:7077	Linux master
+
+注意：YARN Cluster 模式要求 Python 程序和所需依赖在 Linux 集群容器中可用。Windows 只负责编写和上传代码。
+
+1. 创建测试程序
+在 Linux 上创建目录：mkdir -p /home/dsj_admin/pyspark
+创建文件：vi /home/dsj_admin/pyspark/spark_mode_test.py
+
+写入完整代码：
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Spark 4.0.5 五种运行模式综合测试
+
+运行模式：
+1. local
+2. local[*]
+3. yarn-client
+4. yarn-cluster
+5. standalone-client
+"""
+
+import sys
+import argparse
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import sum, count, avg
+
+
+def main():
+
+    parser = argparse.ArgumentParser(
+        description="Spark 五种运行模式综合测试"
+    )
+
+    parser.add_argument(
+        "--mode",
+        required=True,
+        choices=[
+            "local",
+            "local-all",
+            "yarn-client",
+            "yarn-cluster",
+            "standalone-client"
+        ],
+        help="选择 Spark 运行模式"
+    )
+
+    args = parser.parse_args()
+
+    modes = {
+        "local": {
+            "master": "local",
+            "deploy": "client"
+        },
+        "local-all": {
+            "master": "local[*]",
+            "deploy": "client"
+        },
+        "yarn-client": {
+            "master": "yarn",
+            "deploy": "client"
+        },
+        "yarn-cluster": {
+            "master": "yarn",
+            "deploy": "cluster"
+        },
+        "standalone-client": {
+            "master": "spark://master:7077",
+            "deploy": "client"
+        }
+    }
+
+    config = modes[args.mode]
+
+    print("=" * 60)
+    print("Spark 4.0.5 综合测试")
+    print("测试模式:", args.mode)
+    print("Master:", config["master"])
+    print("Deploy:", config["deploy"])
+    print("=" * 60)
+
+    spark = (
+        SparkSession.builder
+        .appName("SparkModeTest-" + args.mode)
+        .master(config["master"])
+        .config("spark.submit.deployMode", config["deploy"])
+        .getOrCreate()
+    )
+
+    sc = spark.sparkContext
+
+    print("Spark Version:", spark.version)
+    print("Application ID:", sc.applicationId)
+    print("Master:", sc.master)
+    print("Default Parallelism:", sc.defaultParallelism)
+
+    # ======================================
+    # 测试一：RDD 分布式计算
+    # ======================================
+
+    print("\n[测试一] RDD 分布式计算")
+
+    numbers = sc.parallelize(range(1, 100001))
+
+    total = numbers.sum()
+
+    print("1~100000 累加结果:", int(total))
+
+    # ======================================
+    # 测试二：DataFrame 创建与查询
+    # ======================================
+
+    print("\n[测试二] DataFrame 数据处理")
+
+    data = [
+        (1, "张三", "开发部", 8000),
+        (2, "李四", "开发部", 10000),
+        (3, "王五", "测试部", 7000),
+        (4, "赵六", "测试部", 9000),
+        (5, "钱七", "运维部", 8500)
+    ]
+
+    columns = ["id", "name", "department", "salary"]
+
+    df = spark.createDataFrame(data, columns)
+
+    df.show()
+
+    # ======================================
+    # 测试三：DataFrame 聚合分析
+    # ======================================
+
+    print("\n[测试三] 部门薪资统计")
+
+    result = (
+        df.groupBy("department")
+        .agg(
+            count("*").alias("人数"),
+            sum("salary").alias("工资总额"),
+            avg("salary").alias("平均工资")
+        )
+    )
+
+    result.show()
+
+    # ======================================
+    # 测试四：SQL 查询
+    # ======================================
+
+    print("\n[测试四] Spark SQL")
+
+    df.createOrReplaceTempView("employees")
+
+    sql_result = spark.sql("""
+        SELECT department,
+               COUNT(*) AS employee_count,
+               MAX(salary) AS max_salary
+        FROM employees
+        GROUP BY department
+        ORDER BY max_salary DESC
+    """)
+
+    sql_result.show()
+
+    # ======================================
+    # 测试五：任务执行与分区
+    # ======================================
+
+    print("\n[测试五] 分区任务执行")
+
+    partition_count = numbers.getNumPartitions()
+
+    print("RDD 分区数量:", partition_count)
+
+    # ======================================
+    # 测试完成
+    # ======================================
+
+    print("\n" + "=" * 60)
+    print("Spark 测试全部完成！")
+    print("测试模式:", args.mode)
+    print("Application ID:", sc.applicationId)
+    print("=" * 60)
+
+    spark.stop()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print("\nSpark 测试失败:", str(e))
+        sys.exit(1)
+
+2. 五种模式分别执行
+下面均在 Linux master 上执行。
+测试 1：Local 单线程
+spark-submit \
+--master local \
+/home/dsj_admin/pyspark/spark_mode_test.py \
+--mode local
+
+测试 2：Local 多线程
+spark-submit \
+--master 'local[*]' \
+/home/dsj_admin/pyspark/spark_mode_test.py \
+--mode local-all
+
+测试 3：YARN Client
+spark-submit \
+--master yarn \
+--deploy-mode client \
+/home/dsj_admin/pyspark/spark_mode_test.py \
+--mode yarn-client
+
+测试 4：YARN Cluster
+spark-submit \
+--master yarn \
+--deploy-mode cluster \
+/home/dsj_admin/pyspark/spark_mode_test.py \
+--mode yarn-cluster
+
+查看任务：
+yarn application -list
+
+查看日志：
+yarn logs -applicationId application_xxxxxxxxx
+
+测试 5：Standalone Client
+修改：/usr/local/bigdata/spark-4.0.5/conf/spark-env.sh  打开其中其中spark standalone的配置的注释
+修改：/usr/local/bigdata/spark-4.0.5/conf/spark-defaults.conf 打开模式3. Standalone Mode 关闭另外2个模式
+启动 Master 和 Worker：
+$SPARK_HOME/sbin/start-master.sh
+$SPARK_HOME/sbin/start-workers.sh
+
+然后执行：
+spark-submit \
+--master spark://master:7077 \
+--deploy-mode client \
+/home/dsj_admin/pyspark/spark_mode_test.py \
+--mode standalone-client
+
+查看 Web UI：
+- Spark Master：http://master:8080
+- YARN ResourceManager：http://master:8088
+
+3. 预期测试结果
+五种模式都应该输出相同的核心计算结果：
+预期计算结果
+测试项目	预期结果
+1~100000 累加	5000050000
+员工总人数	5
+开发部工资总额	18000
+测试部工资总额	16000
+运维部工资总额	8500
+部门数量	3
+
+五种模式计算结果一致
+特别注意两个细节：
+1. 这五种模式是五种测试场景，但实际上是三种 Spark Master 类型：Local、YARN、Standalone。
+2. spark-defaults.conf 中的默认 YARN 参数不会阻止命令行 --master 和 --deploy-mode 覆盖它们。上述测试命令均显式指定运行模式。
+
+
+十六 PySpark 程序在 Spark Standalone 模式下不支持 cluster 提交方式，咱们用java程序演示
+单独编写一个 Java + Spark 4.0.5 测试程序，专门用于验证 Spark Standalone Cluster 模式。
+采用 Maven 项目，使用 JDK 17 编译，生成一个可提交的 JAR 包。
+最终测试流程：
+ Java 编写 Spark 程序。
+ Maven 编译打包。
+ 上传 JAR 到 Linux master。
+ 使用 spark-submit --deploy-mode cluster 提交。
+ Spark Master 将 Driver 分配到 Worker。
+ Driver 和 Executor 执行计算任务。
+ 查看计算结果和运行日志。
+
+
+1、创建 Maven 项目
+项目名称：SparkStandaloneClusterTest
+
+项目结构：
+SparkStandaloneClusterTest/
+├── pom.xml
+└── src/
+    └── main/
+        └── java/
+            └── com/
+                └── bigdata/
+                    └── SparkStandaloneClusterTest.java
+
+2、编写 pom.xml
+这里使用 Spark 4.0.5 官方对应的 Scala 2.13 依赖。
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.bigdata</groupId>
+    <artifactId>SparkStandaloneClusterTest</artifactId>
+    <version>1.0.0</version>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <spark.version>4.0.5</spark.version>
+    </properties>
+
+    <dependencies>
+
+        <!-- Spark SQL -->
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-sql_2.13</artifactId>
+            <version>${spark.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+    </dependencies>
+
+    <build>
+        <plugins>
+
+            <!-- Java 编译插件 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <source>17</source>
+                    <target>17</target>
+                </configuration>
+            </plugin>
+
+            <!-- JAR 打包插件 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>
+                                com.bigdata.SparkStandaloneClusterTest
+                            </mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+
+        </plugins>
+    </build>
+
+</project>
+
+注意：Spark 依赖使用 provided，因为运行时由 Linux 上已经安装的 Spark 提供，不需要把整套 Spark 依赖打包进应用 JAR。
+
+3、编写 Java 测试程序
+文件：src/main/java/com/bigdata/SparkStandaloneClusterTest.java
+完整代码：
+
+package com.bigdata;
+
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Row;
+import org.apache.spark.sql.RowFactory;
+import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.StructType;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+public class SparkStandaloneClusterTest {
+
+    public static void main(String[] args) {
+
+        SparkSession spark = null;
+
+        try {
+
+            // ======================================
+            // 1. 创建 SparkSession
+            // ======================================
+
+            spark = SparkSession.builder()
+                    .appName("SparkStandaloneClusterTest")
+                    .getOrCreate();
+
+            System.out.println("====================================");
+            System.out.println("Spark Standalone Cluster 测试");
+            System.out.println("====================================");
+
+            System.out.println("Spark Version: "
+                    + spark.version());
+
+            System.out.println("Application ID: "
+                    + spark.sparkContext().applicationId());
+
+            System.out.println("Master: "
+                    + spark.sparkContext().master());
+
+            System.out.println("====================================");
+
+            // ======================================
+            // 2. RDD 分布式计算
+            // ======================================
+
+            System.out.println("\n[测试一] RDD 分布式计算");
+
+            JavaSparkContext sc =
+                    JavaSparkContext.fromSparkContext(
+                            spark.sparkContext());
+
+            List<Integer> numbers = IntStream.rangeClosed(1, 100000)
+                    .boxed()
+                    .collect(Collectors.toList());
+
+            JavaRDD<Integer> rdd = sc.parallelize(numbers, 4);
+
+            int sum = rdd.reduce(Integer::sum);
+
+            System.out.println("RDD 分区数量: "
+                    + rdd.getNumPartitions());
+
+            System.out.println("1~100000 累加结果: "
+                    + sum);
+
+            // ======================================
+            // 3. DataFrame 测试
+            // ======================================
+
+            System.out.println("\n[测试二] DataFrame 数据处理");
+
+            List<Row> employees = Arrays.asList(
+                    RowFactory.create(1, "张三", "开发部", 8000),
+                    RowFactory.create(2, "李四", "开发部", 10000),
+                    RowFactory.create(3, "王五", "测试部", 7000),
+                    RowFactory.create(4, "赵六", "测试部", 9000),
+                    RowFactory.create(5, "钱七", "运维部", 8500)
+            );
+
+            StructType schema = new StructType()
+                    .add("id", DataTypes.IntegerType)
+                    .add("name", DataTypes.StringType)
+                    .add("department", DataTypes.StringType)
+                    .add("salary", DataTypes.IntegerType);
+
+            Dataset<Row> df = spark.createDataFrame(
+                    employees, schema);
+
+            df.show();
+
+            // ======================================
+            // 4. Spark SQL 测试
+            // ======================================
+
+            System.out.println("\n[测试三] Spark SQL");
+
+            df.createOrReplaceTempView("employees");
+
+            Dataset<Row> result = spark.sql(
+                    "SELECT department, " +
+                    "COUNT(*) AS employee_count, " +
+                    "SUM(salary) AS total_salary, " +
+                    "AVG(salary) AS avg_salary " +
+                    "FROM employees " +
+                    "GROUP BY department " +
+                    "ORDER BY total_salary DESC"
+            );
+
+            result.show();
+
+            // ======================================
+            // 5. 分布式任务测试
+            // ======================================
+
+            System.out.println("\n[测试四] 分布式任务执行");
+
+            long count = rdd.map(x -> x * 2)
+                    .filter(x -> x % 4 == 0)
+                    .count();
+
+            System.out.println("满足条件的数据数量: "
+                    + count);
+
+            // ======================================
+            // 6. 测试完成
+            // ======================================
+
+            System.out.println("\n====================================");
+            System.out.println("Spark Standalone Cluster 测试成功！");
+            System.out.println("Application ID: "
+                    + spark.sparkContext().applicationId());
+            System.out.println("RDD 累加结果: " + sum);
+            System.out.println("====================================");
+
+        } catch (Exception e) {
+
+            System.err.println("Spark 测试失败！");
+            e.printStackTrace();
+
+            System.exit(1);
+
+        } finally {
+
+            if (spark != null) {
+                spark.stop();
+            }
+
+        }
+    }
+}
+
+
+
+5、Maven 编译打包
+在 Windows 开发电脑上，进入项目根目录：
+mvn clean package
+成功后生成：target/SparkStandaloneClusterTest-1.0.0.jar
+将这个 JAR 上传到 Linux：/home/dsj_admin/pyspark/SparkStandaloneClusterTest-1.0.0.jar
+
+5、启动 Standalone 集群
+在 Linux master 上执行：$SPARK_HOME/sbin/start-master.sh
+启动 Worker：$SPARK_HOME/sbin/start-workers.sh
+检查：jps
+应该能看到：
+Master
+Worker
+打开 Spark Master Web UI：http://master:8080
+确认 Worker 状态为 ALIVE。
+
+6、提交 Standalone Cluster 任务
+执行：
+spark-submit \
+--class com.bigdata.SparkStandaloneClusterTest \
+--master spark://master:7077 \
+--deploy-mode cluster \
+/home/dsj_admin/pyspark/SparkStandaloneClusterTest-1.0.0.jar
+
+
+本节核心测试命令
+这里最重要的参数：
+--deploy-mode cluster
+它表示 Driver 不在提交客户端运行，而是由 Standalone Master 调度到 Worker 上运行。
+因为当前是单机伪分布式，Master 和 Worker 都在 master 上，所以 Driver 最终也会运行在这台机器上。
+
+7、查看运行结果
+打开：http://master:8080
+在 Master 页面查看 Applications。
+找到：SparkStandaloneClusterTest
+点击对应的 Driver，查看运行状态和日志。
+
+也可以查看 Worker 的 Driver 日志：
+ls -lh $SPARK_HOME/work/
+实际 Driver 日志通常位于：
+$SPARK_HOME/work/driver-*/stdout
+$SPARK_HOME/work/driver-*/stderr
+具体目录取决于 Worker 的工作目录配置。

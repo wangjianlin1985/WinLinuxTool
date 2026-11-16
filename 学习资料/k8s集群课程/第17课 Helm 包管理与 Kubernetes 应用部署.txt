@@ -1,0 +1,401 @@
+学习 Kubernetes 的应用包管理和自动化部署。
+你可以把 Helm 理解成 Kubernetes 世界里的 yum、dnf 或 Docker Compose 的应用管理工具。
+以前部署一个应用，可能需要自己编写好几个 YAML 文件，然后逐个执行 kubectl apply。
+学会 Helm 后，很多应用可以通过一条命令完成安装、升级、回滚和卸载。
+
+一、Helm 是什么？
+Helm 是 Kubernetes 的包管理工具。
+它主要解决三个问题：
+1. 简化部署： 不用每次手动编写大量 YAML。
+2. 统一管理： 将 Deployment、Service、ConfigMap 等资源打包管理。
+3. 版本控制： 支持应用升级、降级和回滚。
+
+举个例子。
+假设我们要部署一个 Nginx 应用，之前需要准备：
+nginx/
+├── deployment.yaml
+├── service.yaml
+├── configmap.yaml
+└── ingress.yaml
+然后执行：
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+kubectl apply -f configmap.yaml
+kubectl apply -f ingress.yaml
+
+使用 Helm 后，可以把这些资源组织成一个 Chart：
+helm install nginx ./nginx-chart
+一条命令就能完成部署。
+
+二、Helm 的核心概念
+Helm 主要有三个核心概念。
+1. Chart
+Chart 就是一个应用的安装包，里面包含 Kubernetes YAML 模板、默认配置和应用说明。
+2. Repository
+Chart 仓库：用来存放和分发 Chart，类似 Linux 的 yum 软件仓库。
+3. Release
+安装实例：每次使用 Helm 安装一个 Chart，就会创建一个 Release。可以理解为某个应用的一次部署实例。
+
+它们之间的关系：
+Helm
+  │
+  ├── Repository（Chart 仓库）
+  │      │
+  │      └── Chart（应用安装包）
+  │              │
+  │              ├── Deployment
+  │              ├── Service
+  │              ├── ConfigMap
+  │              └── Ingress
+  │
+  └── Release（安装后的应用实例）
+
+三、在 Kubernetes 集群安装 Helm
+我们继续使用之前搭建好的 Rocky Linux 9.8 Kubernetes 集群：
+节点	IP	角色
+k8s-master	192.168.79.130	Master
+k8s-node1	集群现有 IP	Worker
+k8s-node2	集群现有 IP	Worker
+Helm 只需要在能够访问 Kubernetes 集群的管理节点上安装，不需要每个 Worker 都安装。
+
+1. 下载安装 Helm【我们之前安装过4.3.0版本，这个可跳过，使用方法差不多】
+先在 Master 上执行：curl -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o helm.tar.gz
+解压：tar -zxvf helm.tar.gz
+安装：install linux-amd64/helm /usr/local/bin/helm
+检查版本：helm version
+正常情况下会显示 Helm 版本信息。
+Helm 3 不需要在集群里额外安装 Tiller 服务。
+
+2. 检查 Kubernetes 连接
+kubectl get nodes
+然后：helm list -A
+如果能够正常执行，说明 Helm 已经能够访问 Kubernetes 集群。
+注意：Helm 默认使用当前用户的 Kubernetes kubeconfig，通常是 /root/.kube/config。
+
+四、添加 Helm 仓库
+Helm 仓库可以理解为软件源。
+例如我们添加 Bitnami 仓库：helm repo add bitnami https://charts.bitnami.com/bitnami 【但是这个很慢】
+有一个针对热门 Helm 仓库的国内加速服务，其中包含了 Bitnami 的镜像。可以尝试用它来替换官方地址：
+helm repo add bitnami "https://helm-charts.itboon.top/bitnami" --force-update
+更新仓库：helm repo update
+查看仓库：helm repo list
+查看仓库里面有哪些应用：helm search repo nginx
+查看某个 Chart 的详细信息：helm show chart bitnami/nginx
+查看 Chart 的默认配置：helm show values bitnami/nginx
+
+这里要记住：
+- repo add：添加软件仓库。
+- repo update：更新仓库索引。
+- search repo：搜索应用。
+- show values：查看应用默认配置。
+仓库中的 Chart 版本可能发生变化，所以实际生产部署时最好指定 Chart 版本，不要始终依赖最新版本。
+五、创建自己的 Helm Chart
+这一部分是本课的重点。
+
+我们不只是安装别人的应用，还要学会自己制作 Helm 安装包。
+1. 创建 Chart
+执行：helm create nginx-chart
+查看目录：tree nginx-chart
+大致结构如下：
+nginx-chart/
+├── Chart.yaml
+├── values.yaml
+├── charts/
+├── templates/
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   ├── ingress.yaml
+│   ├── hpa.yaml
+│   ├── serviceaccount.yaml
+│   ├── _helpers.tpl
+│   └── NOTES.txt
+└── .helmignore
+
+每个文件的作用：
+文件		作用
+Chart.yaml	应用名称、版本、描述
+values.yaml	应用默认配置参数
+templates/	Kubernetes YAML 模板
+charts/		依赖的其他 Chart
+.helmignore	指定打包时忽略的文件
+NOTES.txt	安装完成后的提示信息
+
+2. 修改 Chart.yaml
+cat > nginx-chart/Chart.yaml <<'EOF'
+apiVersion: v2
+name: nginx-chart
+description: My Kubernetes Nginx Application
+type: application
+version: 1.0.0
+appVersion: "1.27"
+EOF
+这里注意两个版本：
+- version：Helm Chart 自身的版本。
+- appVersion：应用程序的版本。
+它们不是一回事。
+例如，Chart 从 1.0.0 升级到 1.0.1，但 Nginx 仍然可以使用 1.27。
+
+3. 修改 values.yaml
+values.yaml 是 Helm 最重要的配置文件之一。
+cat > nginx-chart/values.yaml <<'EOF'
+replicaCount: 2
+
+image:
+  repository: nginx
+  pullPolicy: IfNotPresent
+  tag: "1.27"
+
+service:
+  type: ClusterIP
+  port: 80
+
+resources: {}
+EOF
+
+这里配置了：
+参数	含义
+replicaCount	Pod 副本数量
+image.repository	镜像名称
+image.tag	镜像版本
+image.pullPolicy	镜像拉取策略
+service.type	Service 类型
+service.port	Service 端口
+以后修改应用配置，不一定要修改 Deployment 模板，很多情况下只需要修改 values.yaml。
+
+4. 编写 Deployment 模板
+先清空原来自动生成的 Deployment 模板：
+cat > nginx-chart/templates/deployment.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+      - name: nginx
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: 80
+EOF
+
+这里第一次接触 Helm 模板语法。
+几个重要变量：
+模板变量	含义
+{{ .Release.Name }}	当前 Release 名称
+{{ .Values.replicaCount }}	values.yaml 中的副本数
+{{ .Values.image.repository }}	镜像名称
+{{ .Values.image.tag }}	镜像版本
+
+例如：replicas: {{ .Values.replicaCount }}
+当 values.yaml 中设置：replicaCount: 2
+Helm 最终生成的 Kubernetes YAML 就是：
+replicas: 2
+这就是 Helm 的模板替换机制。
+
+5. 编写 Service 模板
+cat > nginx-chart/templates/service.yaml <<'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: {{ .Release.Name }}
+  ports:
+  - port: {{ .Values.service.port }}
+    targetPort: 80
+EOF
+
+这样我们就有了两个 Kubernetes 资源：
+- Deployment：负责管理 Nginx Pod。
+- Service：负责提供集群内部访问入口。
+6. 检查 Helm Chart
+
+执行：helm lint nginx-chart
+作用：检查 Chart 是否存在常见问题。
+预览最终生成的 YAML：
+helm template my-nginx nginx-chart
+注意，这条命令只渲染模板，不会真正创建 Kubernetes 资源。
+重点命令：helm install my-nginx nginx-chart --dry-run --debug
+这是模拟安装，可以提前检查生成结果和安装过程中的问题。
+
+六、使用 Helm 部署 Nginx
+现在正式部署。
+1. 安装应用
+helm install my-nginx nginx-chart
+这里：
+- my-nginx：Release 名称。
+- nginx-chart：Chart 所在目录。
+查看 Helm 安装情况：
+helm list
+查看 Kubernetes Deployment：kubectl get deployment
+查看 Pod：kubectl get pods
+查看 Service：kubectl get svc
+预期结果：
+NAME       READY   UP-TO-DATE   AVAILABLE
+my-nginx   2/2     2            2
+Pod 会有两个副本。
+
+2. 查看 Release 详情
+helm status my-nginx
+查看 Release 历史：helm history my-nginx
+查看 Helm 保存的配置：helm get values my-nginx
+查看完整配置：helm get values my-nginx -a
+查看 Helm 实际生成的资源清单：helm get manifest my-nginx
+
+3. 修改应用副本数量
+假设原来是 2 个 Pod，现在要扩容到 4 个。
+可以直接执行：helm upgrade my-nginx nginx-chart --set replicaCount=4
+查看：kubectl get pods
+你应该能看到 4 个 Nginx Pod。
+也可以修改 values.yaml：
+replicaCount: 4
+然后执行：helm upgrade my-nginx nginx-chart
+两种方式都可以。
+
+4. 修改 Nginx 镜像版本
+例如将 Nginx 从 1.27 改成 1.28：
+helm upgrade my-nginx nginx-chart --set image.tag=1.28
+查看 Deployment：kubectl describe deployment my-nginx
+注意：实际镜像是否能正常拉取，还取决于镜像仓库中是否存在该标签，以及节点网络和镜像仓库配置。
+
+七、Helm 回滚操作
+这是 Helm 非常重要的功能。
+假设：
+- 第一次部署：2 个 Pod。
+- 第二次升级：4 个 Pod。
+- 第三次升级：镜像版本改成 1.28。
+如果第三次升级出现问题，我们可以回滚。
+1. 查看历史版本
+helm history my-nginx
+可能看到：
+REVISION   STATUS       CHART
+1          superseded   nginx-chart-1.0.0
+2          superseded   nginx-chart-1.0.0
+3          deployed     nginx-chart-1.0.0
+
+
+2. 回滚到第二个版本
+helm rollback my-nginx 2
+查看：helm history my-nginx
+注意：回滚本身会产生一个新的 Revision，并不是删除原来的历史记录。
+例如回滚到 Revision 2 后，可能产生 Revision 4。
+这相当于：
+Revision 1：初次部署
+Revision 2：扩容到 4 个 Pod
+Revision 3：修改镜像版本
+Revision 4：回滚到 Revision 2 的配置
+Helm 的回滚功能非常适合生产环境应用升级。
+
+八、Helm 卸载应用
+如果不需要这个应用：helm uninstall my-nginx
+查看：helm list
+
+再检查 Kubernetes 资源：
+kubectl get deployment
+kubectl get svc
+kubectl get pods
+
+注意：
+Helm 卸载通常会删除这个 Release 所管理的 Kubernetes 资源，但 PVC、某些保留资源以及其他特殊资源需要单独检查，
+不能假定所有数据都会随 Release 一起删除。
+
+九、Helm 常用命令汇总
+这一部分建议你收录到 WinLinuxTool 的 Linux/Kubernetes 命令库中。
+命令			作用
+helm version		查看 Helm 版本
+helm repo add		添加 Chart 仓库
+helm repo list		查看仓库
+helm repo update		更新仓库索引
+helm search repo nginx	搜索应用
+helm create nginx-chart	创建 Chart
+helm lint nginx-chart	检查 Chart
+helm template		渲染模板
+helm install		安装应用
+helm list -A		查看所有命名空间的 Release
+helm status		查看 Release 状态
+helm upgrade		升级应用
+helm history		查看升级历史
+helm rollback		回滚应用
+helm get values		查看应用配置
+helm get manifest		查看生成的资源清单
+helm uninstall		卸载应用
+
+十、Helm 与 kubectl 有什么区别？
+这是初学者容易混淆的地方。
+对比		kubectl			Helm
+定位		Kubernetes 资源管理工具	Kubernetes 应用包管理工具
+部署		kubectl apply		helm install
+更新		修改 YAML 后 apply		helm upgrade
+回滚		需要自行处理资源版本	helm rollback
+配置管理		YAML 文件		values.yaml
+模板功能		原生不提供完整模板系统	支持 Go Template
+应用打包		不负责完整打包		Chart
+两者并不是互相替代的关系。
+
+实际工作中经常同时使用：
+helm install my-nginx nginx-chart
+kubectl get pods
+kubectl describe pod nginx-pod
+kubectl logs nginx-pod
+Helm 负责安装和管理应用，kubectl 负责查看、排查和管理 Kubernetes 资源。
+
+十一、生产环境中 Helm 的典型应用
+Helm 不只是用来部署 Nginx。
+很多常见的 Kubernetes 基础设施应用都可以通过 Helm 部署。
+
+Prometheus + Grafana
+用于集群监控、指标采集和可视化。
+
+Argo CD
+用于 GitOps 持续部署，后续课程会学习。
+
+Ingress NGINX
+用于管理集群外部 HTTP/HTTPS 流量。注意选用仍受支持的 Ingress Controller。
+
+Redis
+用于部署缓存服务。
+
+例如，后续部署 Prometheus + Grafana 时，就可以使用 Helm，而不用手工编写几十个 YAML 文件。
+
+十二、本课实战任务
+现在给你安排一套完整的动手练习。建议直接在 k8s-master 上操作。
+第17课实战清单
+实战完成进度
+0/12
+[ ] 安装 Helm，并使用 helm version 验证
+[ ] 添加一个 Helm 仓库并更新索引
+[ ] 使用 helm create 创建 nginx-chart
+[ ] 理解 Chart.yaml、values.yaml、templates 的作用
+[ ] 编写 Deployment 和 Service 模板
+[ ] 使用 helm lint 检查 Chart
+[ ] 使用 helm template 查看生成的 YAML
+[ ] 安装 Nginx，创建 2 个 Pod
+[ ] 使用 helm upgrade 将副本扩容到 4 个
+[ ] 使用 helm history 查看版本历史
+[ ] 使用 helm rollback 回滚到之前的版本
+[ ] 使用 helm uninstall 卸载应用
+重置实战进度
+实战完成后，应该掌握什么？
+你应该能够独立完成：
+1. 创建自己的 Helm Chart。
+2. 通过 values.yaml 修改应用配置。
+3. 使用 Helm 部署 Nginx。
+4. 扩容、升级和回滚应用。
+5. 查看 Helm Release 历史。
+6. 卸载 Helm 管理的应用。
+本课最重要的是理解 Chart、Values、Template、Release 这四个概念。
+
+另外，你现在的集群是 Kubernetes v1.37.2，Helm 本身可以作为独立客户端使用。
+不过，实际安装第三方 Chart 时，必须检查 Chart 对 Kubernetes 版本的兼容性、镜像地址和依赖情况。
+不要因为 Helm 安装成功，就认为应用一定能在集群中运行。

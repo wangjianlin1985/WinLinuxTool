@@ -1,0 +1,164 @@
+我们统一使用 Rocky Linux 9.8 Minimal，在你之前的 VMware Workstation 17 Pro 中安装，作为后续 Kubernetes 三节点集群的基础环境。
+
+我按照实际操作顺序带你安装。先安装第一台 k8s-master，安装完成后再复制出两台 Worker，避免重复安装。
+一、下载 Rocky Linux 9.8 
+Rocky Linux 9.8 Minimal ISO 本次安装版本 64 位 x86_64，无桌面环境 minimal.x86_64.iso 
+下载后建议核对 ISO 的 SHA256 校验值，确保镜像完整。
+
+二、创建 VMware 虚拟机
+打开 VMware Workstation 17 Pro。 
+文件：Rocky-9.8-x86_64-minimal.iso 2.57 GiB  
+
+1. 新建虚拟机
+在 VMware 中选择：
+File → New Virtual Machine
+选择：
+- Configuration：Typical（典型）
+- Installer disc image file (iso)：选择刚下载的 Rocky ISO
+- Guest Operating System：Linux
+- Version：CentOS 9 64-bit（如果列表中没有 Rocky Linux 9）
+虚拟机名称：
+k8s-master
+存储位置建议放在你之前使用的 D 盘，例如：
+D:\Program Files\VMware\k8s-master
+
+2. 配置虚拟机硬件
+建议这样配置：
+硬件	配置
+CPU	2 核
+内存	4096 MB
+硬盘	60 GB
+网络	NAT
+网卡	默认 E1000E 即可
+CD/DVD	使用 Rocky Linux ISO
+
+注意：
+- CPU 设置为 1 个处理器、每个处理器 2 个核心。
+- 内存分配 4GB。
+- 网络必须选择 NAT，后续三台虚拟机才能沿用你之前的 VMnet8 网络。
+- 硬盘选择SCSI或NVME，60GB，建议选择单个虚拟磁盘文件。
+设置完成后，点击 Finish。
+
+3. 启动 Rocky Linux 安装程序
+启动虚拟机，会进入 Rocky Linux 启动菜单。
+Test this media & install Rocky Linux 9.8
+如果不想等待介质检测，也可以直接选择：
+Install Rocky Linux 9.8
+按 Enter。进入安装界面后，选择语言：
+English（推荐）
+这里我建议使用英文系统界面，因为以后学习 Linux、Kubernetes，查看报错和搜索解决方案时，英文环境更方便。
+
+4. 安装配置界面
+进入 Rocky Linux 的安装配置页面后，会看到几个配置项目。按照下面的设置：
+Keyboard		English (US)
+Time & Date	Asia/Shanghai
+Installation Source	Local Media
+Software Selection	Minimal Install
+Installation Destination	60GB 虚拟硬盘
+Network & Host Name	配置网卡和主机名
+Root Password	设置 root 密码
+User Creation	创建普通用户
+
+重点说明几个地方：
+① Installation Destination
+点击进入，选中 60GB 虚拟硬盘，选择Custom自定义分区。 
+挂载点	大小	类型
+/boot	1GB	XFS，标准分区
+/	55GB	XFS，LVM
+swap	4GB	LVM 
+
+最终磁盘结构：
+NAME              SIZE FSTYPE      TYPE MOUNTPOINT
+sr0              1024M             rom
+nvme0n1            60G             disk
+├─nvme0n1p1         1G xfs         part /boot
+└─nvme0n1p2        59G LVM2_member part
+  ├─rlm_192-root   55G xfs         lvm  /
+  └─rlm_192-swap    4G swap        lvm  [SWAP]
+[root@k8s-master ~]# 
+
+② Software Selection
+选择 Minimal Install。
+我们搭建 K8s 使用命令行环境，不需要 GNOME 桌面。
+
+③ Network & Host Name
+主机名设置为：
+k8s-master
+网卡打开（ON）。
+如果需要在安装阶段配置静态 IP，选择 IPv4 → Manual，填写：
+项目	值
+Address	192.168.79.130
+Netmask	255.255.255.0
+Gateway	192.168.79.2
+DNS	223.5.5.5
+这沿用你之前 VMware VMnet8 的 NAT 网络配置。
+
+④ Root Password
+设置 root 密码。
+另外创建普通用户，例如：
+用户名：test
+可以勾选 Make this user administrator，让它拥有 sudo 权限。
+配置完毕后，点击 Begin Installation。
+
+5. 完成安装并重启
+安装完成后，点击 Reboot System。
+
+
+如果重启后又进入安装界面：
+1. 关闭虚拟机。
+2. 进入 VMware 虚拟机设置。
+3. 找到 CD/DVD。
+4. 取消 Connect at power on，或者断开 ISO。
+5. 重新启动虚拟机。
+这时应该进入 Rocky Linux 命令行登录界面。
+6. 登录后检查系统
+使用 root 登录，依次执行：
+
+查看系统版本
+cat /etc/rocky-release
+预期输出：
+Rocky Linux release 9.8 (Blue Onyx)
+
+查看内核版本
+uname -r
+
+查看 IP 地址
+ip addr
+
+查看磁盘分区
+lsblk
+
+检查网络连通性
+ping -c 4 223.5.5.5
+
+检查 DNS
+ping -c 4 www.baidu.com
+
+如果这些检查都正常，第一台 Rocky Linux 就安装完成了。
+
+七、最终三节点规划
+我们后面按照这个规划搭建：
+节点	主机名	IP	内存
+Master	k8s-master	192.168.79.130	4GB
+Worker	k8s-node1	192.168.79.131	4GB
+Worker	k8s-node2	192.168.79.132	4GB
+
+三台机器统一 Rocky Linux 9.8，统一配置，方便排查问题。
+我们先不要急着安装 Kubernetes。
+你先按照上面的步骤把第一台 k8s-master 安装好。
+安装完成后，把下面两条命令的输出发给我：
+cat /etc/rocky-release
+ip addr
+
+我再带你配置系统基础环境、静态 IP、主机名解析和 SSH，然后复制出另外两台机器。
+
+需要关机后选择完全克隆另外2个机器，复制后启动后要修改主机名
+还有网卡mac地址通过Vmware随机生成，进入系统后修改绑定的ip地址
+还需要检查一个重要标识：machine-id 
+cat /etc/machine-id
+
+由于你现在已经有旧 ID，建议使用下面这套明确的重置流程：
+cp -a /etc/machine-id /etc/machine-id.bak
+truncate -s 0 /etc/machine-id
+systemd-machine-id-setup
+三台机器分别执行，不要把同一个 machine-id 手动复制到其他节点。

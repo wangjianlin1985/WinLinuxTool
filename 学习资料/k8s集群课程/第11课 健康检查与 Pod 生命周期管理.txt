@@ -1,0 +1,733 @@
+前面我们已经学习了 Pod、Deployment、Service、Ingress、ConfigMap、Secret、PV/PVC、
+StorageClass、StatefulSet、DaemonSet、Job、CronJob，以及资源管理与 Pod 调度。
+从这一课开始，我们要进一步学习 Kubernetes 如何保证应用真正健康地运行。
+本课的核心问题是：
+1. Kubernetes 怎么知道一个容器是否正常？
+2. 容器进程还在运行，但应用已经无法提供服务，怎么办？
+3. 应用启动比较慢，Kubernetes 会不会误判它已经故障？
+4. Pod 启动、运行、终止分别经历哪些阶段？
+5. 应用更新或删除时，如何优雅地停止服务？
+本课主要学习两个知识体系：
+- 健康检查（Probe）：存活探针、就绪探针、启动探针。
+- Pod 生命周期管理：生命周期阶段、生命周期钩子、优雅终止。
+
+一、为什么需要健康检查？
+先看一个实际场景。
+假设我们在 Kubernetes 中部署了一个 Nginx：kubectl create deployment nginx --image=nginx:1.27
+查看 Pod：kubectl get pods
+输出：
+NAME                     READY   STATUS    RESTARTS   AGE
+nginx-xxxxx              1/1     Running   0          5m
+看起来一切正常。
+但是，这里有一个问题：
+Running 并不代表应用一定能够正常提供服务。
+例如：
+- Nginx 主进程还在，但是工作线程异常。
+- Java 应用进程还在，但是数据库连接池已经全部失效。
+- 应用正在启动，暂时无法接收请求。
+- 应用内部死锁，进程没有退出，但已经无法响应请求。
+Kubernetes 默认主要根据容器进程的运行状态判断容器是否运行。
+它并不知道你的业务程序是否真的健康。
+
+所以，我们需要主动告诉 Kubernetes：
+应用应该通过什么方式判断健康？什么时候应该重启？什么时候可以接收流量？
+这就是 Probe（探针）。
+
+二、Kubernetes 三种健康检查探针
+Kubernetes 提供三种主要探针：
+Liveness：存活探针
+判断容器是否还活着。如果检查失败达到阈值，Kubernetes 会重启容器。
+
+Readiness：就绪探针
+判断应用是否准备好接收请求。如果检查失败，Pod 会暂时从 Service 的可用后端中移除。
+
+Startup：启动探针
+判断应用是否已经完成启动。在启动探针成功之前，存活探针和就绪探针不会执行。
+这三个探针解决的问题不同，一定要区分开。
+
+2.1 存活探针 Liveness Probe
+英文：Liveness Probe。
+作用：检查应用是否还活着，如果应用已经无法正常工作，可以让 Kubernetes 自动重启容器。
+例如 Java 程序：
+- Java 进程还在。
+- 但是程序内部发生死锁。
+- HTTP 接口一直无法响应。
+- 容器仍然显示 Running。
+这时候存活探针就能发挥作用。
+
+配置示例：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: liveness-pod
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    ports:
+    - containerPort: 80
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+重点参数：
+参数	含义
+initialDelaySeconds	容器启动后延迟多少秒开始检查
+periodSeconds	每隔多少秒检查一次
+timeoutSeconds	单次检查超时时间
+failureThreshold	连续失败多少次判定失败
+successThreshold	连续成功多少次判定成功
+
+这里：
+initialDelaySeconds: 10
+periodSeconds: 5
+failureThreshold: 3
+
+表示容器启动后等待10秒开始检查，每隔5秒检查一次，连续失败3次后判定存活检查失败。
+Kubernetes 随后会重启容器。
+
+注意：重启的是容器，不是删除整个 Pod 再创建一个新 Pod。
+
+2.2 就绪探针 Readiness Probe
+英文：Readiness Probe。
+作用：判断应用是否已经准备好接收请求。
+例如：一个 Java 微服务启动时需要：
+1. 启动 JVM。
+2. 加载配置文件。
+3. 连接 MySQL。
+4. 初始化缓存。
+5. 加载业务模块。
+如果 Java 进程已经启动，但是 MySQL 还没有连接成功，此时就不应该让 Service 把请求转发给它。
+
+配置示例：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: readiness-pod
+  labels:
+    app: readiness-demo
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    ports:
+    - containerPort: 80
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 3
+
+如果检查成功：READY   1/1
+如果检查失败：READY   0/1
+
+但是注意：
+Readiness 检查失败不会重启容器！
+它只是让 Pod 暂时不接收 Service 转发过来的流量。
+当应用恢复健康后，探针检查成功，Pod 会重新进入 Service 的可用后端。
+这就是就绪探针最重要的作用。
+
+2.3 启动探针 Startup Probe
+英文：Startup Probe。
+作用：解决应用启动时间过长，导致存活探针误判的问题。
+举个例子：某个 Java 应用启动需要 120 秒。
+
+如果直接配置：
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 3
+
+应用启动10秒后开始检查。
+由于 Java 还没有启动完成，HTTP 接口无法响应。
+连续检查失败后，容器就可能被重启。
+于是出现：
+启动 → 检查失败 → 重启 → 启动 → 检查失败 → 重启
+应用永远无法正常启动。
+这时候就需要 Startup Probe。
+
+配置示例：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: startup-pod
+spec:
+  containers:
+  - name: java-app
+    image: nginx:1.27
+    ports:
+    - containerPort: 80
+
+    startupProbe:
+      httpGet:
+        path: /
+        port: 80
+      periodSeconds: 5
+      failureThreshold: 30
+
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 80
+      periodSeconds: 5
+      failureThreshold: 3
+
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 80
+      periodSeconds: 5
+      failureThreshold: 3
+
+
+这里：
+startupProbe:
+  periodSeconds: 5
+  failureThreshold: 30
+
+启动探针最多允许约150秒的连续失败检查时间。
+在 Startup Probe 成功之前：
+- Liveness Probe 不执行。
+- Readiness Probe 不执行。
+启动探针成功后，另外两个探针才开始工作。
+注意：这里用 Nginx 只是演示配置，真实 Java 应用应该替换为自己的健康检查接口。
+
+
+2.4 三种探针的区别
+这是本课必须掌握的知识点。
+探针		检查目的		失败后的行为
+Liveness		应用是否还活着	重启容器
+Readiness	是否可以接收请求	从 Service 可用后端移除
+Startup		是否完成启动	未启动成功时继续等待，超过失败阈值后重启容器
+
+记忆方法：
+- Startup：能不能启动起来？
+- Liveness：是不是还活着？
+- Readiness：能不能接收请求？
+
+三、探针支持哪些检查方式？
+Kubernetes 主要支持以下四种探针检查方式。
+3.1 HTTP GET 检查
+通过 HTTP 请求检查应用。
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+    scheme: HTTP
+适合：
+- Nginx
+- Spring Boot
+- Web API
+- 微服务
+只要 HTTP 返回成功状态码（200～399），就认为检查成功。
+
+3.2 TCP Socket 检查
+检查指定端口是否能够建立 TCP 连接。
+livenessProbe:
+  tcpSocket:
+    port: 3306
+适合：
+- MySQL
+- Redis
+- TCP 服务
+- 数据库服务
+例如检查 MySQL 的3306端口是否能够建立连接。
+注意：端口能够连接，不代表数据库查询一定正常。
+
+3.3 Exec 命令检查
+在容器内部执行命令。
+livenessProbe:
+  exec:
+    command:
+    - sh
+    - -c
+    - test -f /tmp/healthy
+如果命令退出码为0，检查成功。
+如果退出码非0，检查失败。
+适合检查：
+- 文件是否存在。
+- 进程是否正常。
+- 自定义业务状态。
+
+3.4 gRPC 检查
+通过 gRPC Health Checking Protocol 检查服务健康状态。
+livenessProbe:
+  grpc:
+    port: 50051
+适合采用 gRPC 协议的微服务。
+注意：gRPC 探针使用专门的健康检查协议，不是简单地测试端口是否开放。
+
+四、动手实验：三种探针
+下面开始在你的 Rocky Linux 9.8 Kubernetes 集群中实验。
+当前集群：
+- k8s-master：192.168.79.130
+- k8s-node1
+- k8s-node2
+- Kubernetes：v1.37.2
+实验1：创建带存活探针的 Pod
+创建 YAML：
+cat > /root/liveness.yaml <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: liveness-demo
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    ports:
+    - containerPort: 80
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+EOF
+
+创建：kubectl apply -f /root/liveness.yaml
+查看：kubectl get pods -o wide
+查看详细信息：kubectl describe pod liveness-demo
+重点观察：Liveness: http-get http://:80/ delay=5s timeout=2s period=5s
+查看容器重启次数：kubectl get pod liveness-demo
+
+实验2：模拟存活检查失败
+创建一个故意失败的存活检查：
+cat > /root/liveness-fail.yaml <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: liveness-fail
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    livenessProbe:
+      httpGet:
+        path: /error
+        port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 3
+EOF
+
+创建：kubectl apply -f /root/liveness-fail.yaml
+观察：kubectl get pods -w
+等待一段时间后，你可能看到：
+NAME            READY   STATUS    RESTARTS
+liveness-fail   1/1     Running   1
+为什么还是 Running？
+因为 Kubernetes 重启的是容器，容器重新启动成功后，Pod 仍然可以显示 Running。
+
+查看具体原因：kubectl describe pod liveness-fail
+重点关注：
+Warning  Unhealthy
+Killing  Container failed liveness probe
+这就是存活探针自动修复应用的一种方式。
+
+实验3：验证 Readiness Probe 创建：
+cat > /root/readiness.yaml <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: readiness-demo
+  labels:
+    app: readiness-demo
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    ports:
+    - containerPort: 80
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 80
+      periodSeconds: 5
+EOF
+
+创建：kubectl apply -f /root/readiness.yaml
+创建 Service：
+kubectl expose pod readiness-demo \
+  --name=readiness-service \
+  --port=80 \
+  --target-port=80
+
+查看：
+kubectl get pods
+kubectl get svc
+
+查看 EndpointSlice：kubectl get endpointslices
+或者：kubectl get endpoints
+
+正常情况下，Service 会把请求转发到已经 Ready 的 Pod。
+现在我们来模拟就绪检查失败：
+kubectl edit pod readiness-demo
+把：path: /   改成：path: /error
+保存退出。
+
+观察：kubectl get pods -w
+你会看到：
+NAME             READY   STATUS
+readiness-demo   0/1     Running
+再查看：kubectl get endpoints readiness-service
+正常情况下会看到：ENDPOINTS   <none>
+这意味着：Pod 还在运行，但是 Service 不再把流量转发给它。
+
+恢复配置：kubectl edit pod readiness-demo
+将 /error 改回 /。
+观察 Pod 恢复：kubectl get pods
+以及：kubectl get endpoints readiness-service
+
+注意：Pod 的探针配置不是通过原地修改来维护的好方式，正式环境应该修改 Deployment YAML，再执行 kubectl apply。
+
+五、Pod 生命周期管理
+前面学习的是应用运行过程中如何判断健康。
+现在学习另一个问题：Pod 从创建到删除，究竟经历了什么？
+Kubernetes 中 Pod 有自己的生命周期。
+
+5.1 Pod 的五种生命周期阶段
+Pod Phase（阶段）主要有五种：
+Phase		含义		说明
+Pending		等待中		等待调度、镜像下载或容器创建
+Running		运行中		Pod 已经绑定节点，至少一个容器正在运行或启动
+Succeeded	成功完成		所有容器正常退出
+Failed		运行失败		所有容器已经终止，至少一个容器异常退出
+Unknown		状态未知		无法获取 Pod 所在节点的状态
+
+注意：Pod Phase 和 kubectl get pods 显示的 STATUS 并不是完全相同的概念。
+例如：STATUS: CrashLoopBackOff  这不是 Pod Phase，而是容器当前等待状态的一种展示。
+
+5.2 容器的三种状态
+除了 Pod Phase，容器本身还有三种状态。
+容器状态		含义
+Waiting		等待启动
+Running		正在运行
+Terminated	已经终止
+
+查看：kubectl describe pod nginx
+重点观察：
+State:          Running
+Last State:     Terminated
+Reason:         Error
+Exit Code:      1
+Restart Count:  2
+
+这里：
+- State：当前容器状态。
+- Last State：上一次容器的状态。
+- Exit Code：上一次退出码。
+- Restart Count：重启次数。
+例如：
+Exit Code: 0 一般表示程序正常退出。
+Exit Code: 1 一般表示程序异常退出。
+
+5.3 Pod 生命周期示意
+Pending
+等待调度、下载镜像、创建容器
+	↓
+Running
+容器启动，应用运行
+	↓
+Succeeded	Failed
+正常完成		异常结束
+Unknown 是节点状态无法确认时出现的特殊阶段，不是正常的下一步生命周期阶段。
+
+这里需要特别理解：
+- Nginx 这种长期运行的服务，通常一直处于 Running。
+- Job 这种执行任务的 Pod，正常完成后通常进入 Succeeded。
+- 容器异常退出且 Pod 中所有容器都终止后，Pod 可能进入 Failed。
+
+六、Pod 重启策略 restartPolicy
+Pod 创建时可以设置容器重启策略。
+主要有三种：
+策略	含义
+Always	无论容器正常还是异常退出，都尝试重启
+OnFailure	只有容器异常退出时才重启
+Never	不自动重启容器
+
+默认值：restartPolicy: Always
+例如：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: restart-demo
+spec:
+  restartPolicy: OnFailure
+  containers:
+  - name: test
+    image: busybox:1.36
+    command:
+    - sh
+    - -c
+    - "echo Hello Kubernetes; exit 1"
+
+创建：kubectl apply -f restart.yaml
+观察：kubectl get pods -w
+由于执行了：exit 1
+容器异常退出，Kubernetes 会按照 OnFailure 策略尝试重启。
+
+查看：kubectl describe pod restart-demo
+可以看到容器重启次数不断增加。
+这里要注意一个知识点：
+restartPolicy 是 Pod 级别的配置，不是每个容器单独设置的。
+另外：
+- Deployment 和 StatefulSet 的 Pod 通常使用 Always。
+- Job 通常使用 OnFailure 或 Never。
+
+七、Pod 生命周期钩子 Lifecycle Hooks
+这部分在实际项目中非常有用。
+Kubernetes 提供两个主要生命周期钩子：
+1. postStart
+2. preStop
+
+7.1 postStart：容器启动后执行
+作用：容器创建后，执行指定的操作。
+例如：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-demo
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    lifecycle:
+      postStart:
+        exec:
+          command:
+          - sh
+          - -c
+          - "echo container-started > /tmp/start.log"
+
+创建：kubectl apply -f lifecycle.yaml
+进入容器：kubectl exec -it lifecycle-demo -- sh
+查看：cat /tmp/start.log
+输出：container-started
+说明 postStart 已经执行。
+注意：
+postStart 并不保证在容器主进程启动之前执行。它和容器入口进程启动是并行发生的，
+而且 postStart 完成之前，容器状态可能还不会进入 Running。
+
+7.2 preStop：容器停止前执行
+作用：在容器真正停止之前，先执行一些清理工作。
+例如：
+- 通知 Java 应用停止接收新请求。
+- 等待正在处理的请求完成。
+- 保存临时数据。
+- 关闭应用连接。
+- 执行自定义清理脚本。
+配置：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: prestop-demo
+spec:
+  terminationGracePeriodSeconds: 30
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    lifecycle:
+      preStop:
+        exec:
+          command:
+          - sh
+          - -c
+          - "echo stopping > /tmp/stop.log; sleep 5"
+
+创建：kubectl apply -f prestop.yaml
+删除：kubectl delete pod prestop-demo
+删除时，Kubernetes 会执行：
+1. 开始终止 Pod。
+2. 执行 preStop。
+3. 向容器主进程发送 SIGTERM 信号。
+4. 等待容器正常退出。
+5. 如果超过宽限时间仍未退出，发送 SIGKILL 强制终止。
+注意：preStop 和 SIGTERM 的具体先后关系是有保证的，即 preStop 钩子完成后，才会向容器主进程发送终止信号。
+
+八、优雅终止 Pod：terminationGracePeriodSeconds
+这个知识点和 preStop 是配套的。假设你的 Java 微服务正在处理用户请求。
+此时执行：kubectl delete pod java-app
+如果 Kubernetes 直接杀死进程：
+- 用户请求可能中断。
+- 数据可能没有保存。
+- 数据库连接可能没有正常关闭。
+- 消息队列中的任务可能没有处理完。
+这就需要优雅终止（Graceful Shutdown）。
+
+配置：
+spec:
+  terminationGracePeriodSeconds: 30
+含义：给容器最多30秒的正常退出时间。
+
+正常情况下：kubectl delete pod
+发起 Pod 删除
+执行 preStop
+执行清理工作（如果配置）
+发送 SIGTERM
+通知应用正常退出
+应用完成清理并退出
+正常终止
+如果宽限时间耗尽，Kubernetes 会强制终止仍未退出的容器。
+
+例如 Java Spring Boot 应用，可以配置：
+spec:
+  terminationGracePeriodSeconds: 60
+  containers:
+  - name: java
+    image: my-java-app:v1
+
+Java 应用还需要正确处理 SIGTERM，停止接收新请求并完成正在处理的工作。
+
+注意：
+- preStop 的执行时间也占用终止宽限时间。
+- 60秒不是单独给 preStop 的时间。
+- 如果 preStop 执行5秒，剩余正常终止时间大约就是55秒。
+- Kubernetes 在某些情况下可能额外请求一次短暂的宽限期延长，但不能依赖这个机制。
+
+九、Pod 健康检查与生命周期的综合应用
+现在把前面学到的知识组合起来。
+这是一个相对完整的 Web 应用 Pod 配置：
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-health-demo
+  labels:
+    app: web-health
+spec:
+  restartPolicy: Always
+  terminationGracePeriodSeconds: 30
+
+  containers:
+  - name: nginx
+    image: nginx:1.27
+
+    ports:
+    - containerPort: 80
+
+    startupProbe:
+      httpGet:
+        path: /
+        port: 80
+      periodSeconds: 5
+      failureThreshold: 30
+
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 80
+      periodSeconds: 10
+      failureThreshold: 3
+
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 80
+      periodSeconds: 5
+      failureThreshold: 3
+
+    lifecycle:
+      postStart:
+        exec:
+          command:
+          - sh
+          - -c
+          - "echo started > /tmp/start.log"
+
+      preStop:
+        exec:
+          command:
+          - sh
+          - -c
+          - "sleep 5"
+
+
+创建：kubectl apply -f web-health.yaml
+查看：kubectl get pods
+查看健康检查：kubectl describe pod web-health-demo
+查看容器日志：kubectl logs web-health-demo
+进入容器：kubectl exec -it web-health-demo -- sh
+检查启动日志：cat /tmp/start.log
+删除：kubectl delete -f web-health.yaml
+
+这个配置同时使用了：
+- Startup Probe：控制启动检查。
+- Liveness Probe：检测应用存活状态。
+- Readiness Probe：检测应用是否可以接收流量。
+- postStart：容器启动后的操作。
+- preStop：容器终止前的操作。
+- terminationGracePeriodSeconds：优雅终止时间。
+实际项目中，这些探针应当根据应用自身的健康检查接口设计，不能简单地全部使用 /。
+
+十、常用查看与排查命令汇总
+命令				作用
+kubectl get pods			查看 Pod 状态
+kubectl get pods -o wide		查看 Pod 所在节点及 IP
+kubectl describe pod 名称		查看 Pod 详细信息
+kubectl logs Pod名称		查看容器日志
+kubectl logs Pod名称 --previous	查看上一次容器日志
+kubectl get events --sort-by=.metadata.creationTimestamp	按时间查看事件
+kubectl get endpoints		查看 Service 后端地址
+kubectl get endpointslices		查看 EndpointSlice
+kubectl exec -it Pod名称 -- sh		进入容器
+kubectl delete pod 名称		删除 Pod
+kubectl get pod 名称 -o yaml		查看 Pod 完整 YAML
+
+特别记住两个排障命令：
+kubectl describe pod Pod名称
+kubectl logs Pod名称 --previous
+当 Pod 出现 CrashLoopBackOff 时，这两个命令非常有用。
+
+十一、本课知识总结
+知识点		必须掌握的内容
+Liveness Probe	失败后重启容器
+Readiness Probe	失败后停止接收 Service 流量
+Startup Probe	保护启动时间较长的应用
+HTTP GET		HTTP 接口检查
+TCP Socket	TCP 端口检查
+Exec		执行容器内部命令
+gRPC		gRPC 健康检查
+Pod Phase	Pending、Running、Succeeded、Failed、Unknown
+Container State	Waiting、Running、Terminated
+restartPolicy	Always、OnFailure、Never
+postStart		容器启动后的生命周期钩子
+preStop		容器终止前的生命周期钩子
+Graceful Shutdown	优雅终止，避免请求和数据丢失
+
+本课最重要的三个区别：
+1. Liveness 失败，重启容器。
+2. Readiness 失败，不重启容器，只停止向它转发流量。
+3. Startup 失败，继续等待；达到失败阈值后才触发容器重启。
+
+十二、课后练习
+建议你在自己的三节点集群中完成下面几个实验。
+第11课实验完成情况
+0/8 已完成
+[ ] 创建一个配置了 Liveness Probe 的 Nginx Pod
+[ ] 故意配置错误的 HTTP 检查路径，观察容器自动重启
+[ ] 创建配置 Readiness Probe 的 Pod，并关联 Service
+[ ] 观察 Readiness 失败时 Endpoint 是否移除 Pod
+[ ] 创建一个使用 Startup Probe 的 Pod
+[ ] 使用 postStart 创建文件，并验证文件内容
+[ ] 使用 preStop 和 terminationGracePeriodSeconds 测试优雅终止
+[ ] 使用 kubectl describe 和 kubectl logs --previous 排查故障
+重置练习进度
+实验中的一个注意事项：
+前面 Readiness 实验如果需要修改检查路径，不建议直接使用 kubectl edit pod 修改已经创建的 Pod。
+Pod 的大部分容器配置字段不可原地修改。
+
+建议修改 YAML 后重新创建：
+kubectl delete pod readiness-demo
+kubectl apply -f /root/readiness.yaml
+如果要测试错误路径，先修改 YAML 中的 path: / 为 path: /error，再删除并重新创建 Pod。

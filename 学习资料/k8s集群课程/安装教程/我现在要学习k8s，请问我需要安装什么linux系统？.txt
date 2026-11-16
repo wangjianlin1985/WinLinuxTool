@@ -1,0 +1,75 @@
+结合你目前的学习环境，我建议你使用 Rocky Linux 9.x 来学习 Kubernetes（K8s）。
+
+你之前已经在 VMware Workstation 17 Pro 中搭建过 CentOS 7.6 环境，配置过 Docker、MySQL、Redis、Elasticsearch 等服务。因此，继续使用 VMware 做 K8s 实验最合适，不需要换虚拟化平台。
+
+不过，这次我建议你不要继续使用 CentOS 7.6。
+一、应该选择哪个 Linux 系统？
+我推荐以下三个系统：
+
+1. Rocky Linux 9
+首选推荐
+- 与 RHEL 生态兼容
+- 适合学习企业级 Kubernetes 部署
+- SELinux、systemd、firewalld 等企业 Linux 特性齐全
+
+2. Ubuntu Server 24.04 LTS
+- Kubernetes 官方文档中常见的部署环境
+- 软件包和社区教程丰富
+- 适合学习云原生和实际生产部署
+
+3. Debian 13
+- 系统比较精简
+- 稳定性好
+- 适合熟悉 Linux 基础后进一步学习
+
+
+
+我的建议是：Rocky Linux 9.x，先不要纠结其他发行版。
+二、VMware 虚拟机应该怎么规划？
+我建议你不要只创建一台虚拟机，而是直接搭建一个三节点 Kubernetes 集群。
+节点	主机名	IP 地址	配置建议
+Master	k8s-master	192.168.79.130	2核 / 4GB
+Worker1	k8s-node1	192.168.79.131	2核 / 4GB
+Worker2	k8s-node2	192.168.79.132	2核 / 4GB
+
+这里沿用你之前 VMware NAT 网段 192.168.79.0/24，避免重新配置网络。
+如果你的物理机内存还是之前的 32GB，建议：
+- 三台虚拟机各分配 4GB。
+- 每台分配 2 个 vCPU。
+- 系统盘每台至少 40GB。
+- 使用 NAT 网络，确保三台机器互通。
+三、学习 K8s 应该使用 Docker 还是 containerd？
+这里有一个重要知识点：
+你之前学习 Docker 时，主要使用 Docker Engine 运行容器。
+但是现在 Kubernetes 已经不再直接内置 Docker 支持了。
+
+建议你的学习环境采用：
+组件	选择
+Linux	Rocky Linux 9
+Kubernetes	选择当前稳定版
+集群部署	kubeadm
+容器运行时	containerd
+Pod 网络插件	Calico 或 Flannel
+集群管理	kubectl
+可视化管理	后续学习 Dashboard
+
+Kubernetes 官方文档也明确说明，Docker Engine 需要额外安装 cri-dockerd 才能通过 CRI 接入，而 containerd 可以直接作为容器运行时。
+Kubernetes+1
+
+四、我的学习路线建议
+按照这个顺序学习：
+1. Linux 环境准备、主机名、静态 IP、时间同步。
+2. 安装 containerd，理解 CRI、OCI、CNI。
+3. 安装 kubeadm、kubelet、kubectl。
+4. 初始化 Master 节点。
+5. Worker 节点加入集群。
+6. 安装 Calico 网络插件。
+7. 学习 Pod、Deployment、ReplicaSet、Service。
+8. 学习 ConfigMap、Secret、PV、PVC。
+9. 学习 Ingress、DNS、资源限制、探针。
+10. 把之前 Docker Compose 编排的 Java 微服务迁移到 K8s。
+官方安装文档：Kubernetes kubeadm 安装指南。
+
+最后，我想先确认一个问题：
+你这次是打算继续使用之前的 VMware Workstation 17 Pro，在 Windows 11 上搭建三台 Rocky Linux 虚拟机吗？
+如果是，我可以直接带你从 Rocky Linux 9 的 ISO 下载、虚拟机创建、网络配置开始，一步一步搭建一个真正可用的三节点 K8s 集群。

@@ -1,0 +1,176 @@
+ 一、整体搭建路线
+Kubernetes 集群部署路线
+1. 系统初始化：关闭 Swap、配置内核模块、网络转发、主机名解析
+2. 安装 containerd：配置容器运行时、systemd cgroup 驱动
+3. 安装 Kubernetes 组件：安装 kubeadm、kubelet、kubectl
+4. 初始化 Master：使用 kubeadm init 初始化控制平面
+5. 安装 Calico： 建立 Pod 网络
+6. 加入 Worker：使用 kubeadm join 加入另外两台机器
+7. 验证集群：查看节点、Pod、网络和服务
+
+二、三台机器的固定规划
+项目	Master		Node1		Node2
+主机名	k8s-master	k8s-node1	k8s-node2
+IP	192.168.79.130	192.168.79.131	192.168.79.132
+CPU	2核		2核		2核
+内存	4GB		4GB		4GB
+系统	Rocky 9.8		Rocky 9.8		Rocky 9.8
+
+注意：三台机器都需要安装 containerd、kubelet、kubeadm；只有 Master 需要执行初始化操作，Worker 需要执行加入操作。
+
+
+三、第一阶段：系统初始化
+这一阶段要在三台虚拟机上执行相同的操作。
+第 1 步：关闭 Swap
+先查看当前 Swap：
+swapon --show
+
+关闭 Swap：
+swapoff -a
+
+然后检查：
+free -h
+swapon --show
+
+swapon --show 没有输出，就说明当前 Swap 已关闭。
+
+接下来还要防止重启后自动启用。
+编辑配置文件：
+vi /etc/fstab
+找到类似下面这一行：
+/dev/mapper/rlm_192-swap swap swap defaults 0 0
+在行首添加 #，变成：
+#/dev/mapper/rlm_192-swap swap swap defaults 0 0
+注意：你的实际配置可能使用 UUID，不一定是上面这个路径。只注释掉挂载类型为 swap 的那一行，不要修改 / 和 /boot。
+修改/etc/fstab后需要用 mount -a 检查是否有错误
+
+第 2 步：加载内核模块
+先理解两个模块：
+模块		作用
+overlay		支持 OverlayFS，容器镜像分层文件系统会用到
+br_netfilter	让桥接网络流量能够经过 Linux 网络过滤框架
+
+三台机器分别执行：
+modprobe overlay
+modprobe br_netfilter
+执行后用 lsmod | grep -E 'overlay|br_netfilter'  检查是否成功
+
+设置开机自动加载：
+cat > /etc/modules-load.d/k8s.conf <<EOF
+overlay
+br_netfilter
+EOF
+
+第 3 步：配置内核网络参数
+Kubernetes 的 Pod 网络涉及 Linux 网络转发，因此需要开启 IPv4 转发。
+三台机器分别执行：
+cat > /etc/sysctl.d/k8s.conf <<EOF
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOF
+
+加载配置：
+sysctl --system
+
+检查：
+sysctl net.ipv4.ip_forward
+
+正常结果：
+net.ipv4.ip_forward = 1
+
+这些内核模块和转发配置符合 Kubernetes 容器运行时的网络准备要求。
+
+第4步： 关闭防火墙
+三台分别执行：
+systemctl disable --now firewalld
+检查：
+systemctl status firewalld
+看到 inactive (dead) 就表示当前已经停止。
+注意：这只适合隔离的实验环境，不建议直接用于生产服务器。
+
+第5步： 查看SELinux【请关闭】
+SELinux 是 Linux 的强制访问控制机制（MAC）。
+它主要负责限制进程能访问哪些文件、目录、端口和系统资源。
+Rocky Linux 9 默认通常启用 SELinux。但是后面测试不行 这个还是要关闭下的
+Kubernetes 并不要求必须关闭 SELinux。现代 containerd 和 Kubernetes 可以在 SELinux Enforcing 模式下运行。
+执行如下命令：
+setenforce 0
+sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+
+查看状态：
+getenforce
+可能返回：
+Enforcing	强制执行安全策略
+Permissive	只记录违规，不阻止
+Disabled	完全关闭
+
+我的建议： 我们先保留 SELinux 的 Enforcing，不要为了安装 Kubernetes 就直接关闭它。
+如果后续遇到容器权限、挂载或网络方面的问题，再结合审计日志排查。
+
+第6步： 配置时间同步【rocky9.8默认已安装启动好chrony】
+第一步：检查是否安装 chrony
+三台机器分别执行：
+rpm -q chrony
+如果提示未安装，再执行：
+dnf install -y chrony
+第二步：启动时间同步服务
+三台机器分别执行：
+systemctl enable --now chronyd
+这里：
+- enable：设置开机自动启动。
+- --now：立即启动服务。
+- chronyd：chrony 的后台时间同步服务。
+第三步：检查时间同步状态
+timedatectl
+重点关注：
+System clock synchronized: yes
+NTP service: active
+再执行：
+chronyc tracking
+可以查看当前时间源、系统时钟偏差等信息。
+如果刚启动服务，可能需要等待一会儿，才能完成首次同步。
+
+第7步：配置三台机器的 /etc/hosts
+Kubernetes 集群中的节点需要能够通过主机名相互识别。我们给三台机器配置统一的主机名与 IP 映射。
+
+注意：如果之前已经添加过这些记录，不要重复追加。可以先检查：
+cat /etc/hosts
+配置完成后，三台机器都应该能解析这三个名称。
+
+三台机器都执行：
+cat >> /etc/hosts <<EOF
+192.168.79.130 k8s-master
+192.168.79.131 k8s-node1
+192.168.79.132 k8s-node2
+EOF
+
+例如在 master 上：
+getent hosts k8s-master
+getent hosts k8s-node1
+getent hosts k8s-node2
+
+预期分别返回对应的 IP 地址。
+为什么要配置？
+例如在 master 上执行：
+ping -c 2 k8s-node1
+系统会先通过 /etc/hosts 将 k8s-node1 解析成 192.168.79.131，再通过网络发送数据包。
+这相当于给集群中的每台机器建立一份统一的主机名通讯录。
+
+四、第一阶段完成检查
+三台机器分别执行：
+swapon --show
+lsmod | grep -E 'overlay|br_netfilter'
+sysctl net.ipv4.ip_forward
+systemctl status firewalld
+
+预期结果：
+- Swap 没有输出。
+- 能看到 overlay 和 br_netfilter 模块。
+- IPv4 转发值为 1。
+- 防火墙关闭看到 inactive (dead) 
+本阶段目标
+ 三台 Rocky Linux 都完成系统初始化。
+
+你先在三台机器上完成这三个步骤，把检查结果发给我。 
+下一步我们开始安装 containerd，并重点讲解它和 Docker、Kubernetes、CRI 之间的关系。

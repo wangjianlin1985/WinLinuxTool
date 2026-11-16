@@ -1,0 +1,491 @@
+今天开始学习 Kubernetes 中非常重要的一部分：StatefulSet（有状态工作负载）。
+重点理解：为什么数据库不能简单地按照 Deployment 的方式管理？StatefulSet 又解决了什么问题？
+
+一、什么是有状态应用？
+首先理解两个概念。
+1. 无状态应用（Stateless）
+无状态应用的特点：
+- 不保存必须依赖本地容器的数据。
+- 任意一个副本都可以处理用户请求。
+- Pod 删除后重新创建，不影响应用核心数据。
+- 多个 Pod 可以互相替换。
+
+假设我们部署了 3 个 Nginx：
+             Service
+                |
+       +--------+--------+
+       |        |        |
+     Pod A    Pod B    Pod C
+    Nginx    Nginx    Nginx
+
+这三个 Pod 没有本质区别。
+假设 Pod A 出现故障：
+             Service
+                |
+       +--------+--------+
+       |        |        |
+     Pod B    Pod C    Pod D
+
+Kubernetes 会重新创建一个 Pod D。
+对于用户来说，通常没有明显影响。
+这就是 Deployment 最适合管理的应用类型。
+
+2. 有状态应用（Stateful）
+有状态应用的特点：
+- 需要保存数据。
+- 每个实例可能有自己的身份。
+- 不同实例之间可能存在主从、集群成员等关系。
+- 重启或者重新创建后，需要继续使用原来的数据。
+常见应用：
+应用		为什么需要有状态
+MySQL		保存数据库文件
+Redis		保存持久化数据
+MongoDB	保存文档数据
+Elasticsearch	保存索引数据
+Kafka		保存消息和日志
+ZooKeeper	保存集群协调数据
+
+例如，你之前使用 Docker Compose 搭建过 MySQL、Redis 集群。
+如果把 MySQL 容器删除，再创建一个全新的容器，而没有挂载原来的数据目录，那么原来的数据库数据就可能丢失。
+
+所以数据库不能只考虑容器能不能运行，还必须考虑：
+1. 数据存在哪里？
+2. Pod 重建后还能不能找到原来的数据？
+3. Pod 的网络身份会不会变化？
+4. 多个数据库实例如何区分？
+这就是 StatefulSet 要解决的问题。
+
+二、StatefulSet 是什么？
+核心概念：StatefulSet 是 Kubernetes 专门用于管理有状态应用的控制器。
+
+它与 Deployment 最大的区别是：
+- Deployment：管理一组可以互相替换的 Pod。
+- StatefulSet：管理一组具有稳定身份和持久化存储关联的 Pod。
+例如创建 3 个副本：
+Deployment 创建的 Pod：
+nginx-7c9d8f6b5-abcde
+nginx-7c9d8f6b5-fghij
+nginx-7c9d8f6b5-klmno
+
+StatefulSet 创建的 Pod：
+mysql-0
+mysql-1
+mysql-2
+
+注意 StatefulSet 的 Pod 名称具有固定编号。
+即使 mysql-1 删除后重新创建，它的名字仍然是：mysql-1
+而不是随机生成一个新的名字。
+
+StatefulSet 的四个核心特征
+1. 固定的 Pod 名称
+mysql-0
+mysql-1
+mysql-2
+
+2. 稳定的网络身份
+每个 Pod 都可以通过固定 DNS 名称访问。
+
+3. 独立的持久化存储
+每个 Pod 可以绑定自己的 PVC。
+
+4. 有序创建和删除
+默认情况下：
+创建：mysql-0 → mysql-1 → mysql-2
+删除：mysql-2 → mysql-1 → mysql-0
+这对于数据库集群非常重要。
+
+三、StatefulSet 与 Deployment 的区别
+这是本课必须掌握的知识点。
+对比项目	Deployment	StatefulSet
+适用场景	无状态应用	有状态应用
+Pod 名称	通常带随机后缀	固定编号
+Pod 身份	可以互相替换	每个实例有固定身份
+网络标识	通常不固定	稳定 DNS
+存储	可以共享或独立配置	常用独立 PVC
+创建顺序	通常不保证顺序	默认有序
+删除顺序	不保证顺序	默认逆序
+
+记住：Deployment 管理应用副本，StatefulSet 管理有固定身份的应用实例。
+
+四、StatefulSet 的核心架构
+StatefulSet 通常会与以下 Kubernetes 资源配合使用：
+- Headless Service
+- StatefulSet
+- PersistentVolumeClaim
+- PersistentVolume
+- StorageClass
+
+假设我们创建 3 个 MySQL 实例：
+              Headless Service
+                mysql-service
+                      |
+          +-----------+-----------+
+          |           |           |
+        mysql-0     mysql-1     mysql-2
+          |           |           |
+         PVC-0       PVC-1       PVC-2
+          |           |           |
+         PV-0        PV-1        PV-2
+          |           |           |
+        数据盘       数据盘       数据盘
+
+
+这里有一个非常重要的概念：
+每个 StatefulSet Pod 都有自己独立的 PVC。
+例如：
+mysql-0 → data-mysql-0
+mysql-1 → data-mysql-1
+mysql-2 → data-mysql-2
+即使 mysql-1 被删除，重新创建后，Kubernetes 仍然会将原来的 PVC 关联回来。
+这就是 StatefulSet 的存储身份关联。
+
+五、Headless Service：无头服务
+这是 StatefulSet 非常重要的配套知识。
+前面学习 Service 时，我们知道普通 Service 会分配一个 ClusterIP，例如：
+nginx-service
+ClusterIP: 10.96.100.10
+请求访问这个 IP 时，Kubernetes 会将流量转发给后端符合条件的 Pod。
+
+但是 StatefulSet 有一个特殊需求：
+我不仅需要访问整个数据库集群，还需要单独访问 mysql-0、mysql-1、mysql-2。
+普通 Service 不适合直接解决这个问题。
+
+所以 Kubernetes 提供了 Headless Service（无头服务）。
+1. Headless Service 是什么？
+普通 Service：
+spec:
+  type: ClusterIP
+
+Headless Service：
+spec:
+  clusterIP: None
+
+最重要的就是：
+clusterIP: None
+它不会分配普通的 ClusterIP，而是通过 DNS 返回后端 Pod 的地址。
+
+例如：
+Pod	DNS 名称
+mysql-0	mysql-0.mysql-service.default.svc.cluster.local
+mysql-1	mysql-1.mysql-service.default.svc.cluster.local
+mysql-2	mysql-2.mysql-service.default.svc.cluster.local
+
+这里要注意：mysql-0.mysql-service.default.svc.cluster.local
+分别代表：
+mysql-0		Pod 名称
+mysql-service	Headless Service 名称
+default       	Namespace
+svc.cluster.local Kubernetes 默认服务 DNS 域名
+这样数据库集群中的不同节点就可以通过固定 DNS 名称互相通信。
+
+2. Headless Service YAML
+cat > /root/mysql-headless.yaml <<'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+spec:
+  clusterIP: None
+  selector:
+    app: mysql
+  ports:
+  - port: 3306
+    name: mysql
+EOF
+
+创建：kubectl apply -f /root/mysql-headless.yaml
+查看：kubectl get svc
+你会看到类似：
+NAME            TYPE        CLUSTER-IP
+mysql-service   ClusterIP   None
+虽然显示类型是 ClusterIP，但是 IP 为 None，这就是 Headless Service。
+
+六、StatefulSet YAML 配置详解
+接下来我们学习 StatefulSet 的核心配置。
+先不急着部署真正的 MySQL 集群，我们先使用 Nginx 模拟有状态应用，重点学习 Pod 身份和独立存储。
+创建文件：
+cat > /root/nginx-statefulset.yaml <<'EOF'
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nginx-stateful
+spec:
+  serviceName: nginx-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx-stateful
+  template:
+    metadata:
+      labels:
+        app: nginx-stateful
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+          name: web
+        volumeMounts:
+        - name: nginx-data
+          mountPath: /usr/share/nginx/html/data
+  volumeClaimTemplates:
+  - metadata:
+      name: nginx-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 1Gi
+EOF
+
+
+这里有几个重要配置需要理解。
+1. serviceName
+serviceName: nginx-headless
+指定关联的 Headless Service。
+这个 Service 需要提前创建，名称必须一致。
+
+2. replicas
+replicas: 3
+表示创建三个 Pod：
+nginx-stateful-0
+nginx-stateful-1
+nginx-stateful-2
+
+3. volumeClaimTemplates
+这是今天最重要的配置。
+volumeClaimTemplates:
+- metadata:
+    name: nginx-data
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    storageClassName: local-path
+    resources:
+      requests:
+        storage: 1Gi
+
+它的作用是：StatefulSet 每创建一个 Pod，就自动创建一个对应的 PVC。
+最终效果：
+nginx-stateful-0
+    |
+    +-- nginx-data-nginx-stateful-0
+
+nginx-stateful-1
+    |
+    +-- nginx-data-nginx-stateful-1
+
+nginx-stateful-2
+    |
+    +-- nginx-data-nginx-stateful-2
+
+
+这与 Deployment 中直接引用一个 PVC 有很大的区别。
+Deployment 可以让多个 Pod 使用同一个 PVC（具体还要看存储访问模式及后端能力）。
+而 StatefulSet 的 volumeClaimTemplates 会为每个实例分别申请 PVC。
+
+4. 为什么使用 local-path？
+因为你前面第7课已经安装并使用了：local-path
+所以这里直接使用它动态创建 PVC，不需要手工创建三个 PV。
+注意：local-path 是本地节点存储方案，并不具备跨节点数据复制能力。
+
+七、动手实验：部署 StatefulSet
+我们开始在你的 Kubernetes 集群上操作。
+你目前的集群是：
+k8s-master   Ready
+k8s-node1    Ready
+k8s-node2    Ready
+StorageClass 使用：local-path
+
+第一步：创建 Headless Service
+cat > /root/nginx-headless.yaml <<'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-headless
+spec:
+  clusterIP: None
+  selector:
+    app: nginx-stateful
+  ports:
+  - name: web
+    port: 80
+    targetPort: 80
+EOF
+
+执行：kubectl apply -f /root/nginx-headless.yaml
+
+第二步：创建 StatefulSet
+执行：kubectl apply -f /root/nginx-statefulset.yaml
+查看：kubectl get statefulsets
+查看 Pod：kubectl get pods -o wide
+
+正常情况下会逐个创建：
+nginx-stateful-0
+nginx-stateful-1
+nginx-stateful-2
+
+注意：默认采用有序创建，前一个 Pod 达到 Ready 后才会创建下一个。
+第三步：查看自动创建的 PVC
+执行：kubectl get pvc
+应该能看到：
+NAME                              STATUS   CAPACITY
+nginx-data-nginx-stateful-0       Bound    1Gi
+nginx-data-nginx-stateful-1       Bound    1Gi
+nginx-data-nginx-stateful-2       Bound    1Gi
+这就说明 StatefulSet 已经为三个 Pod 分别创建了三个 PVC。
+
+再查看 PV：kubectl get pv
+可以看到对应的 PV。
+
+第四步：测试三个 Pod 的独立存储
+我们分别在三个 Pod 中写入不同的数据。
+写入第一个：kubectl exec nginx-stateful-0 -- sh -c "echo mysql-0-data > /usr/share/nginx/html/data/test.txt"
+写入第二个：kubectl exec nginx-stateful-1 -- sh -c "echo mysql-1-data > /usr/share/nginx/html/data/test.txt"
+写入第三个：kubectl exec nginx-stateful-2 -- sh -c "echo mysql-2-data > /usr/share/nginx/html/data/test.txt"
+
+分别读取：
+kubectl exec nginx-stateful-0 -- cat /usr/share/nginx/html/data/test.txt
+kubectl exec nginx-stateful-1 -- cat /usr/share/nginx/html/data/test.txt
+kubectl exec nginx-stateful-2 -- cat /usr/share/nginx/html/data/test.txt
+
+预期结果：
+mysql-0-data
+mysql-1-data
+mysql-2-data
+
+这说明三个 Pod 使用的是不同的持久化存储。
+
+第五步：测试 Pod 删除后数据是否保留
+这是本课最重要的实验。
+删除第一个 Pod：kubectl delete pod nginx-stateful-0
+然后观察：kubectl get pods -w
+
+StatefulSet 会自动重新创建：nginx-stateful-
+等待它恢复 Ready：kubectl get pods
+
+再次读取数据：kubectl exec nginx-stateful-0 -- cat /usr/share/nginx/html/data/test.txt
+预期结果：mysql-0-data
+
+实验成功
+这就证明了：Pod 被删除并重新创建后，仍然可以使用原来的 PVC 和持久化数据。
+
+注意，这个实验测试的是 Pod 重建，不是节点损坏后的数据恢复。因为我们使用的是 local-path，本地数据仍然依赖原来存储所在的节点。
+
+八、StatefulSet 的扩容与缩容
+Deployment 可以扩容，StatefulSet 也可以。
+1. 扩容到 5 个副本
+kubectl scale statefulset nginx-stateful --replicas=5
+查看：kubectl get pods
+新增：
+nginx-stateful-3
+nginx-stateful-4
+
+查看 PVC：
+kubectl get pvc
+会新增两个 PVC。
+
+2. 缩容到 2 个副本
+kubectl scale statefulset nginx-stateful --replicas=2
+StatefulSet 会优先删除编号最大的 Pod：
+nginx-stateful-4
+nginx-stateful-3
+nginx-stateful-2
+
+最终只保留：
+nginx-stateful-0
+nginx-stateful-1
+
+重要：缩容时，StatefulSet 默认不会自动删除对应的 PVC。
+这是为了避免缩容时误删有价值的数据。
+
+但是要特别注意：
+- StatefulSet 删除 Pod，不等于删除 PVC。
+- StatefulSet 删除自身，默认也不会自动删除这些 PVC。
+- 如果你主动删除 PVC，而 StorageClass 对应 PV 的回收策略是 Delete，那么底层数据也可能被删除。
+所以，生产环境千万不要随意执行：
+kubectl delete pvc --all
+
+九、StatefulSet 的真实应用：MySQL 集群
+我们再把今天的知识与实际工作联系起来。
+假设你要在 Kubernetes 中部署 MySQL。
+可以采用这样的架构：
+             MySQL Service
+                   |
+             MySQL 主节点
+               mysql-0
+                   |
+             数据同步复制
+               /       \
+          mysql-1     mysql-2
+           从节点      从节点
+             |           |
+            PVC         PVC
+             |           |
+            PV          PV
+
+StatefulSet 负责：
+- 保证 mysql-0、mysql-1、mysql-2 的固定身份。
+- 创建对应的 PVC。
+- 维护 Pod 的副本数量。
+- 提供有序创建和删除机制。
+但是要注意一个关键问题：
+
+StatefulSet 不负责 MySQL 主从复制，也不负责自动选主。
+这些功能需要 MySQL 自己的复制机制、数据库 Operator 或其他集群管理方案来实现。
+
+例如：
+- MySQL 主从复制
+- Redis Sentinel
+- MongoDB Replica Set
+- Kafka 集群
+Kubernetes 负责管理这些应用的运行环境，数据库自身负责数据复制、集群协调等业务逻辑。
+这两个层面一定要区分开。
+
+十、StatefulSet 常用管理命令
+建议把下面这些命令收录到你的 WinLinuxTool 常用命令库中。
+命令			作用
+kubectl get statefulsets	查看 StatefulSet
+kubectl get sts		简写查看 StatefulSet
+kubectl describe sts nginx-stateful	查看详细信息
+kubectl get pods -o wide	查看 Pod 及所在节点
+kubectl get pvc		查看持久化存储申请
+kubectl get pv		查看持久化卷
+kubectl scale sts nginx-stateful --replicas=5	扩容到5个副本
+kubectl scale sts nginx-stateful --replicas=2	缩容到2个副本
+kubectl delete pod nginx-stateful-0	删除指定 Pod（会自动重建）
+kubectl delete sts nginx-stateful	删除 StatefulSet
+kubectl rollout status sts/nginx-stateful	查看更新状态
+
+实验完成后的清理
+如果已经完成实验，不再需要保留数据，可以执行：kubectl delete sts nginx-stateful
+
+删除 Service：kubectl delete svc nginx-headless
+
+删除实验创建的 PVC：
+kubectl delete pvc nginx-data-nginx-stateful-0 nginx-data-nginx-stateful-1 \
+nginx-data-nginx-stateful-2 nginx-data-nginx-stateful-3 nginx-data-nginx-stateful-4
+
+注意：最后一步会删除实验数据。是否真正删除底层 PV 数据，还取决于 PV 的回收策略。不要误删之前第6、7课创建的 PVC。
+
+十一、本课知识总结
+今天需要掌握的核心知识：
+知识点			需要理解的内容
+StatefulSet		管理有状态应用
+Pod 固定名称		使用固定编号
+稳定网络标识		每个 Pod 有固定 DNS
+Headless Service		clusterIP: None
+volumeClaimTemplates	自动为每个 Pod 创建 PVC
+独立存储			每个 Pod 有自己的 PVC
+有序创建			0 → 1 → 2
+有序删除			2 → 1 → 0
+扩缩容			kubectl scale
+数据持久化		Pod 重建后继续使用原 PVC
+
+我建议你重点记住这三个知识点：
+1. Deployment： 适合 Nginx、Java、Web 等无状态应用。
+2. StatefulSet： 适合 MySQL、Redis、MongoDB 等需要稳定身份和存储的应用。
+3. Headless Service： 让 StatefulSet 中的每个 Pod 都可以通过固定 DNS 名称访问。
