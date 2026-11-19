@@ -1,0 +1,668 @@
+第13讲安装的 Flink 环境可以直接在 Windows 电脑上使用 Java 编写程序，通过网络连接 Linux 虚拟机中的 Flink 集群，提交任务并执行。
+
+不过需要区分两种运行方式。
+1. Windows Java 程序连接 Linux Flink
+你现在的环境是：Windows 电脑
+Java 开发环境（IDEA / Eclipse）
+编写 Flink Java 程序 → 提交任务
+
+Rocky Linux 9 虚拟机
+Flink JobManager：接收任务、调度任务
+Flink TaskManager：实际执行计算任务
+Flink Web UI：8081 端口
+你的 Windows Java 程序负责开发，Linux 负责运行 Flink 集群，两者通过网络通信。
+
+2. Windows 需要安装什么？
+Windows 端只需要：
+软件		用途
+JDK		编译和运行 Java 程序
+IDEA		编写 Java 程序
+Maven		管理 Flink 依赖
+Flink Java API 依赖	编写 Flink 计算程序
+Windows 不需要再安装一套 Flink 服务端，也不需要安装 JobManager 或 TaskManager。
+
+3. Linux Flink 环境需要开放什么端口？
+你第13讲部署的 Flink 默认端口主要有：
+端口	用途
+8081	Flink Web UI（你当前配置的管理页面）
+6123	JobManager RPC（取决于版本和配置）
+6124	TaskManager RPC（取决于版本和配置）
+6125	Blob Server（取决于版本和配置）
+
+注意：上面 RPC 端口是常见配置示例，具体以你安装的 Flink 2.2.2 config.yaml 实际配置为准，不能直接认定全部是这些端口。
+
+4. Windows Java 程序怎么提交任务？
+后续我们可以在 Windows IDEA 中创建 Maven 项目，例如：
+FlinkWindowsDemo
+├── pom.xml
+└── src
+    └── main
+        └── java
+            └── FlinkWordCount.java
+
+
+Maven 引入 Flink 依赖，然后编写 Java 程序。
+例如，统计一段文本中的单词数量：
+DataStream<String> text = env.fromElements(
+    "hello flink",
+    "hello java",
+    "flink java"
+);
+
+text.flatMap(...)
+    .keyBy(...)
+    .sum(...);
+
+编译后将程序提交到 Linux Flink 集群运行。
+执行之后，你可以在 Linux 的 Flink Web UI 中看到：
+- Job 已经提交
+- Job 的运行状态
+- JobManager 调度信息
+- TaskManager 执行信息
+- 作业运行图（DAG）
+- 各个算子的执行情况
+- 任务运行日志
+
+5. 你这个大数据学习环境可以这样分工
+Windows：开发端
+- Java 编程
+- IDEA 开发
+- Maven 构建
+- 编写 Flink DataStream 程序
+- 提交任务、查看结果
+  
+  Linux：大数据运行端
+- Hadoop / HDFS
+- YARN
+- Hive
+- Spark
+- HBase
+- Kafka
+- Flink
+- 运行各组件服务
+
+这也是你后续学习大数据开发非常推荐的方式：Linux 负责搭建环境，Windows 负责写 Java 程序，直接连接 Linux 中的各个大数据组件。
+
+
+实战：Windows IDEA 开发 Java Flink 程序，提交到 Linux 集群运行
+
+
+完成一个真实的 Flink 任务，模拟实时数据处理。
+
+我们模拟一个电商订单数据流：
+订单数据不断产生
+       │
+       ▼
+  Windows IDEA 编写 Java 程序
+       │
+       │ Maven 编译打包
+       ▼
+  提交 Flink Job
+       │
+       ▼
+ Linux Flink JobManager
+       │
+       ├── 任务调度
+       │
+       ▼
+ Linux Flink TaskManager
+       │
+       ├── 接收订单数据
+       ├── 计算订单金额
+       ├── 按商品分类统计
+       └── 输出统计结果
+       │
+       ▼
+ Flink Web UI 查看运行情况
+
+
+最终实现以下功能：
+- Windows 开发 Java 程序
+- Maven 下载 Flink 依赖
+- Java 编写 Flink DataStream
+- 打包生成 JAR
+- Windows 远程提交任务至 Linux
+- Linux Flink 执行任务
+- Web UI 查看任务运行状态
+- 查看实际计算结果
+
+二、确认 Linux Flink 环境
+先在 Linux 虚拟机上确认 Flink 正常运行。
+1. 查看 Flink 进程
+jps
+
+
+正常情况下应该看到类似：
+StandaloneSessionClusterEntrypoint
+TaskManagerRunner
+
+
+具体进程名称会根据 Flink 版本及启动方式有所区别。
+2. 查看 Web UI
+浏览器打开：http://192.168.79.10:8081
+你应该可以看到 Flink Dashboard 页面。
+重点查看：
+- Overview
+- Task Managers
+- Running Jobs
+- JobManager
+如果 Web UI 可以正常访问，说明 Flink 集群管理端基本正常。
+
+三、Windows 安装及准备开发环境
+Windows 端只需要准备 Java 开发工具，不需要部署 Flink 服务。
+1. 确认 JDK
+在 Windows CMD 中执行：java -version
+再执行：javac -version
+建议 Windows 开发 JDK 与 Linux Flink 所支持的 Java 版本兼容。我们后续采用 JDK 17 作为开发环境。
+
+2. IDEA 创建 Maven 项目
+打开 IntelliJ IDEA创建项目：
+配置项	设置
+项目名称	FlinkWindowsDemo
+项目类型	Maven
+JDK	17
+GroupId	com.demo
+ArtifactId	flink-windows-demo
+项目语言	Java
+
+项目结构：
+FlinkWindowsDemo
+│
+├── pom.xml
+│
+└── src
+    └── main
+        └── java
+            └── com
+                └── demo
+                    └── FlinkOrderDemo.java
+
+
+四、配置 Maven（pom.xml）
+打开项目中的 pom.xml，将原内容替换为以下配置。
+这里使用 Flink 2.2.2，与第13讲安装的版本保持一致。
+
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.demo</groupId>
+    <artifactId>flink-windows-demo</artifactId>
+    <version>1.0</version>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <flink.version>2.2.2</flink.version>
+    </properties>
+
+    <dependencies>
+        <!-- Flink DataStream API -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-streaming-java</artifactId>
+            <version>${flink.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Flink 任务提交客户端 -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-clients</artifactId>
+            <version>${flink.version}</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>17</release>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+
+
+配置完成后，IDEA 右侧 Maven 面板点击 Reload，等待下载依赖。
+这里的 provided 表示 Flink 的运行依赖由 Linux Flink 集群提供，Java 程序的 JAR 不需要把 Flink 整套运行库重复打包进去。
+
+五、编写 Java Flink 程序
+创建文件：src/main/java/com/demo/FlinkOrderDemo.java
+
+我们实现一个订单金额实时汇总程序。
+1. 模拟订单数据
+订单格式：
+订单编号,商品分类,金额
+
+例如：
+1001,手机,3999
+1002,电脑,5999
+1003,手机,2999
+1004,平板,1999
+1005,电脑,6999
+1006,手机,1999
+
+
+2. Java 完整代码
+ 
+
+package com.demo;
+
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.api.common.typeinfo.Types;
+
+
+public class FlinkOrderDemo {
+
+    public static void main(String[] args) throws Exception {
+
+        // 1. 获取 Flink 执行环境
+        StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.getExecutionEnvironment();
+
+        // 2. 模拟订单数据
+        DataStream<String> orders = env.fromElements(
+                "1001,手机,3999",
+                "1002,电脑,5999",
+                "1003,手机,2999",
+                "1004,平板,1999",
+                "1005,电脑,6999",
+                "1006,手机,1999"
+        );
+
+        // 3. 提取商品分类和订单金额
+        DataStream<Tuple2<String, Integer>> amounts =
+                orders.map(line -> {
+                    String[] fields = line.split(",");
+
+                    return Tuple2.of(
+                            fields[1],
+                            Integer.parseInt(fields[2])
+                    );
+                }).returns(
+                        Types.TUPLE(
+                                Types.STRING,
+                                Types.INT
+                        )
+                );
+
+        // 4. 按商品分类分组
+        // 5. 按商品分类分组并累计金额
+        DataStream<Tuple2<String, Integer>> result =
+                amounts
+                        .keyBy(data -> data.f0)
+                        .sum(1);
+
+
+        // 6. 输出结果
+        result.print();
+
+        // 7. 提交 Flink 作业
+        env.execute("Flink Order Statistics");
+    }
+}
+
+3. 这段程序做了什么？
+Flink 数据处理流程
+订单数据源 fromElements()
+1001,手机,3999 ...
+
+map() 数据转换
+提取商品分类 + 金额
+
+keyBy() 分组
+手机 / 电脑 / 平板
+
+sum(1) 累计金额
+按商品分类累计订单金额
+
+print() 输出计算结果
+
+注意这里的 sum(1) 是对 Tuple2 的第2个字段（金额）累计，不是统计订单数量。
+
+六、在 Windows IDEA 中编译程序
+先在 IDEA 中直接运行 FlinkOrderDemo.java。
+这个阶段是本地运行测试，不是提交到 Linux。
+
+如果本地依赖和 JDK 配置正常，程序可以运行并输出类似结果：
+(手机,3999)
+(电脑,5999)
+(手机,6998)
+(平板,1999)
+(电脑,12998)
+(手机,8997)
+
+这是因为 fromElements() 是有界数据，数据很快就处理完毕。累计输出会随着每一笔订单到达而变化。
+但此时的 Flink 执行环境是 Windows 本地环境，还没有使用 Linux 集群。
+接下来才是关键步骤：将程序提交到 Linux。
+
+七、打包 Java 程序
+在 IDEA 右侧 Maven 面板中：
+双击：
+Lifecycle
+  ├── clean
+  ├── compile
+  ├── test
+  └── package   ← 双击
+
+或者在 IDEA Terminal 执行：mvn clean package
+
+编译成功后，生成 JAR：target/flink-windows-demo-1.0.jar
+这个 JAR 就是我们的 Java Flink 程序。
+
+八、将 JAR 上传到 Linux
+我们将程序上传到 Linux 的：/data/flink/jobs/
+
+1. Linux 创建目录
+在 Linux 虚拟机执行：mkdir -p /data/flink/jobs
+
+2. Windows 上传 JAR
+如果 Windows 安装了 OpenSSH，可以直接使用 PowerShell：
+scp .\target\flink-windows-demo-1.0.jar dsj_admin@192.168.79.10:/data/flink/jobs/
+将 dsj_admin 换成你 Linux 实际使用的账号。
+如果使用 WinLinuxTool 的 SSH 文件管理功能，也可以直接将 JAR 上传到该目录。
+
+3. Linux 确认文件
+ls -lh /data/flink/jobs/
+应该看到：
+flink-windows-demo-1.0.jar
+
+九、向 Linux Flink 集群提交任务
+这是整个实验的核心。
+在 Linux 终端执行：
+flink run \
+-c com.demo.FlinkOrderDemo \
+/data/flink/jobs/flink-windows-demo-1.0.jar
+
+其中：
+参数	说明
+flink run	提交 Flink 作业
+-c	指定 Java 主类
+com.demo.FlinkOrderDemo	我们编写的 Java 主类
+JAR 路径	Java 程序编译打包后的文件
+
+提交后 Flink CLI 会向集群提交任务，JobManager 接收任务并调度，TaskManager 执行实际的数据计算。
+如果提交成功，命令终端会显示 Job ID，类似：
+Job has been submitted with JobID xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+实际 JobID 是一串十六进制字符。
+
+十、通过 Flink Web UI 观察任务
+Windows 浏览器打开：http://192.168.79.10:8081
+进入 Flink Dashboard。
+
+观察步骤
+1. 进入 Flink Web UI。
+2. 点击 Jobs。
+3. 找到 Flink Order Statistics。
+4. 查看任务状态。
+5. 点击任务名称。
+6. 查看 Job Overview。
+7. 查看 Execution Plan。
+8. 查看 Source、Map、KeyBy、Sum、Sink 算子。
+你会看到程序实际被 Flink 转换成了任务执行图。
+
+因为这次数据只有6条，作业运行速度很快，可能很快就进入 FINISHED，这属于正常现象，不是集群故障。
+
+十一、查看实际计算结果
+由于我们使用了：result.print();
+输出结果会打印到实际执行 Sink 算子的 TaskManager 日志中，而不是直接输出到 Windows IDEA 控制台。
+
+Linux 上可以查看 Flink 日志：
+ls -lh $FLINK_HOME/log/
+
+查看最近日志：
+tail -n 100 $FLINK_HOME/log/*.out
+
+或者根据实际日志文件名称筛选：
+grep -n "手机\|电脑\|平板" $FLINK_HOME/log/*.out
+
+预计最终累计金额：
+商品分类	订单金额累计
+手机	8997
+电脑	12998
+平板	1999
+
+计算逻辑验证通过：
+- 手机：3999 + 2999 + 1999 = 8997
+- 电脑：5999 + 6999 = 12998
+- 平板：1999
+由于 print() 的输出顺序可能交错，并且会输出每次累计变化，所以日志中可能不是只有3条最终结果。
+
+
+上面的还是需要把jar文件提交到linux主机直接，Windows IDEA 还可以直连 Flink 2.2.2 实战 Demo如下：
+下面给你一套可以直接创建 Maven 项目的案例。使用你目前的 Linux 虚拟机 IP：
+- Linux Flink：192.168.79.130
+- Flink 版本：2.2.2
+- Web UI：8081
+- JobManager REST：8081
+- JobManager RPC：默认 6123
+这里纠正一个容易混淆的地方：这个远程 Java 客户端使用 Flink REST 提交接口，连接地址使用 8081，不是把内部 RPC 端口 6123 当成提交端口。 Flink 2.2 官方配置文档区分了 REST 客户端端口和内部 RPC 端口。
+一、创建 Maven 项目
+IDEA 创建：
+项目名称：FlinkRemoteDemo
+GroupId：com.demo
+ArtifactId：flink-remote-demo
+JDK：17
+Maven：是
+
+
+项目结构：
+FlinkRemoteDemo
+│
+├── pom.xml
+│
+└── src
+    └── main
+        └── java
+            └── com
+                └── demo
+                    └── FlinkRemoteDemo.java
+
+
+二、配置 pom.xml
+
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.demo</groupId>
+    <artifactId>flink-remote-demo</artifactId>
+    <version>1.0</version>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <flink.version>2.2.1</flink.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-streaming-java</artifactId>
+            <version>${flink.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-clients</artifactId>
+            <version>${flink.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>17</release>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+
+点击 IDEA Maven 的 Reload，下载依赖。
+
+三、编写远程提交 Java 程序
+创建 FlinkRemoteDemo.java：
+
+package com.flink;
+
+import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+
+public class FlinkRemoteDemo {
+
+    private static final String FLINK_HOST = "192.168.79.10";
+    private static final int FLINK_PORT = 8081;
+
+    public static void main(String[] args) throws Exception {
+
+        // Windows 本地 JAR 文件路径
+        String jarPath = System.getProperty("user.dir")
+                + "/target/flink-remote-demo-1.0.jar";
+
+        System.out.println("================================");
+        System.out.println("准备连接 Linux Flink 集群");
+        System.out.println("地址：" + FLINK_HOST);
+        System.out.println("端口：" + FLINK_PORT);
+        System.out.println("程序：" + jarPath);
+        System.out.println("================================");
+
+        // 创建远程执行环境
+        StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.createRemoteEnvironment(
+                        FLINK_HOST,
+                        FLINK_PORT,
+                        2,
+                        jarPath
+                );
+
+        env.setParallelism(2);
+
+        // 模拟订单数据
+        DataStream<String> orders = env.fromElements(
+                "1001,手机,3999",
+                "1002,电脑,5999",
+                "1003,手机,2999",
+                "1004,平板,1999",
+                "1005,电脑,6999",
+                "1006,手机,1999"
+        );
+
+        // 提取商品分类和金额
+        DataStream<Tuple2<String, Integer>> amounts =
+                orders.map(line -> {
+
+                    String[] fields = line.split(",");
+
+                    return Tuple2.of(
+                            fields[1],
+                            Integer.parseInt(fields[2])
+                    );
+
+                }).returns(
+                        Types.TUPLE(
+                                Types.STRING,
+                                Types.INT
+                        )
+                );
+
+        // 按商品分类分组并累计金额
+        DataStream<Tuple2<String, Integer>> result =
+                amounts
+                        .keyBy(data -> data.f0)
+                        .sum(1);
+
+        // 输出到 TaskManager 日志
+        result.print();
+
+        System.out.println("正在提交远程 Flink 任务...");
+
+        env.execute("Windows Remote Flink Order Demo");
+
+        System.out.println("Flink 任务执行完成！");
+    }
+}
+
+
+
+这里最重要的是：
+StreamExecutionEnvironment.createRemoteEnvironment(
+        FLINK_HOST,
+        FLINK_PORT,
+        2,
+        jarPath
+);
+ 
+
+参数分别是：
+参数		作用
+FLINK_HOST	Linux JobManager 地址
+FLINK_PORT	Flink REST 端口
+2		任务默认并行度
+jarPath		Windows 本地生成的用户程序 JAR
+Flink 客户端会将用户程序提交给远程集群，不需要你手工 SCP 上传。官方 API 也明确说明，远程环境会把程序提交到集群执行。
+Apache Nightlies
+
+四、先在 Windows 测试网络连接
+打开 PowerShell：
+Test-NetConnection 192.168.79.130 -Port 8081
+
+正常应该显示：
+TcpTestSucceeded : True
+
+再用浏览器访问：
+http://192.168.79.10:8081
+
+如果访问不了，先检查 Linux Flink 的 REST 监听配置：
+rest.address: 192.168.79.10
+rest.bind-address: 0.0.0.0
+rest.port: 8081
+注意：修改配置后需要重启 Flink。这里的地址适用于你目前的单 JobManager Standalone 环境。
+
+五、打包一次，然后 IDEA 直接运行
+首次需要生成用户程序 JAR。
+在 IDEA Terminal 执行：mvn clean package -DskipTests
+生成：target/flink-remote-demo-1.0.jar
+然后回到 IDEA，打开 FlinkRemoteDemo.java，直接点击绿色三角形运行。
+以后修改代码后，先重新执行 Maven package，再点击运行即可。整个上传提交过程由 Java 客户端自动完成。
+
+六、观察 Linux Flink Web UI
+运行 Java 程序后，打开：
+http://192.168.79.10:8081
+进入 Jobs 页面，应该可以看到：
+Windows Remote Flink Order Demo
+观察：
+1. Job 是否成功提交。
+2. Job 是否进入 RUNNING。
+3. Job 是否进入 FINISHED。
+4. 查看 Job Execution Plan。
+5. 查看 Source、Map、KeyBy、Sum、Sink 算子。
+计算结果可以在 Linux TaskManager 日志中查看：
+grep -nE '手机|电脑|平板' $FLINK_HOME/log/*.out
+
+预期最终结果：
+分类	累计金额
+手机	8997
+电脑	12998
+平板	1999

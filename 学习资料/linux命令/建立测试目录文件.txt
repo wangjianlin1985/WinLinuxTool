@@ -1,0 +1,275 @@
+我建议建立一个统一的测试目录：
+/root/linux-text-lab/
+├── grep/                 # grep 测试
+│   ├── app.log
+│   ├── system.log
+│   └── users.txt
+├── find/                 # find 测试
+│   ├── docs/
+│   │   ├── readme.txt
+│   │   └── config.conf
+│   ├── logs/
+│   │   ├── app.log
+│   │   └── error.log
+│   ├── backup/
+│   │   └── old.log
+│   ├── empty.txt
+│   └── data.bin
+├── sed/                  # sed 测试
+│   ├── test.txt
+│   └── config.conf
+└── awk/                  # awk 测试
+    ├── students.txt
+    ├── numbers.txt
+    └── access.log
+
+
+一、创建测试目录和文件
+直接复制下面整段命令，在你的 Kubernetes Rocky Linux 测试环境中执行即可。
+一键创建测试环境
+# 创建测试目录
+mkdir -p /root/linux-text-lab/{grep,find/{docs,logs,backup},sed,awk}
+
+# ==============================
+# 1. grep 测试文件
+# ==============================
+
+cat > /root/linux-text-lab/grep/app.log <<'EOF'
+2026-11-07 08:00:01 INFO Application started
+2026-11-07 08:01:15 ERROR Database connection failed
+2026-11-07 08:02:20 WARNING Disk usage is high
+2026-11-07 08:03:10 INFO User login success
+2026-11-07 08:04:30 ERROR Cannot connect to Redis
+2026-11-07 08:05:00 INFO Request completed
+2026-11-07 08:06:12 error File not found
+2026-11-07 08:07:25 DEBUG Loading configuration
+2026-11-07 08:08:30 WARNING Memory usage is high
+2026-11-07 08:09:45 INFO Application stopped
+EOF
+
+cat > /root/linux-text-lab/grep/system.log <<'EOF'
+kernel: Linux kernel started
+sshd: SSH service started
+firewalld: Firewall service stopped
+nginx: Web server started
+systemd: Network service started
+nginx: ERROR configuration failed
+crond: Scheduled task executed
+EOF
+
+cat > /root/linux-text-lab/grep/users.txt <<'EOF'
+root:x:0:0:root:/root:/bin/bash
+test:x:1000:1000:test:/home/test:/bin/bash
+admin:x:1001:1001:admin:/home/admin:/bin/bash
+mysql:x:27:27:MySQL Server:/var/lib/mysql:/sbin/nologin
+nginx:x:998:998:nginx user:/var/lib/nginx:/sbin/nologin
+EOF
+
+# ==============================
+# 2. find 测试文件
+# ==============================
+
+cat > /root/linux-text-lab/find/docs/readme.txt <<'EOF'
+Linux find command test
+This is a documentation file.
+Linux system administration.
+EOF
+
+cat > /root/linux-text-lab/find/docs/config.conf <<'EOF'
+server=192.168.79.130
+port=8080
+username=test
+enabled=true
+EOF
+
+cat > /root/linux-text-lab/find/logs/app.log <<'EOF'
+Application started
+Application running
+Application stopped
+EOF
+
+cat > /root/linux-text-lab/find/logs/error.log <<'EOF'
+ERROR: Database connection failed
+ERROR: Redis connection timeout
+EOF
+
+cat > /root/linux-text-lab/find/backup/old.log <<'EOF'
+Old backup log file
+This file is used for find time testing.
+EOF
+
+# 创建空文件
+touch /root/linux-text-lab/find/empty.txt
+
+# 创建一个大于 1KB 的测试文件
+dd if=/dev/zero of=/root/linux-text-lab/find/data.bin bs=1024 count=2 status=none
+
+# 设置旧文件的修改时间为10天前
+touch -d "10 days ago" /root/linux-text-lab/find/backup/old.log
+
+# ==============================
+# 3. sed 测试文件
+# ==============================
+
+cat > /root/linux-text-lab/sed/test.txt <<'EOF'
+Linux is powerful
+Linux is open source
+Linux is widely used
+Windows is an operating system
+Linux is suitable for servers
+
+This is a test file
+Linux administration
+EOF
+
+cat > /root/linux-text-lab/sed/config.conf <<'EOF'
+# Application configuration
+server=192.168.79.100
+port=8080
+username=admin
+password=123456
+enabled=true
+# End configuration
+EOF
+
+# ==============================
+# 4. awk 测试文件
+# ==============================
+
+cat > /root/linux-text-lab/awk/students.txt <<'EOF'
+zhangsan 85 20
+lisi 92 21
+wangwu 76 19
+zhaoliu 95 22
+chenqi 68 20
+EOF
+
+cat > /root/linux-text-lab/awk/numbers.txt <<'EOF'
+10
+20
+30
+40
+50
+60
+EOF
+
+cat > /root/linux-text-lab/awk/access.log <<'EOF'
+192.168.79.101 - - [07/Nov/2026:08:00:01 +0800] "GET /index.html HTTP/1.1" 200 1024
+192.168.79.102 - - [07/Nov/2026:08:01:15 +0800] "GET /login HTTP/1.1" 200 2048
+192.168.79.101 - - [07/Nov/2026:08:02:20 +0800] "POST /login HTTP/1.1" 401 512
+192.168.79.103 - - [07/Nov/2026:08:03:10 +0800] "GET /api/user HTTP/1.1" 200 4096
+192.168.79.102 - - [07/Nov/2026:08:04:30 +0800] "GET /error HTTP/1.1" 404 256
+192.168.79.101 - - [07/Nov/2026:08:05:00 +0800] "GET /index.html HTTP/1.1" 200 1024
+192.168.79.103 - - [07/Nov/2026:08:06:12 +0800] "POST /api/data HTTP/1.1" 500 128
+EOF
+
+echo "=================================="
+echo "Linux 文本处理测试环境创建完成"
+echo "测试目录：/root/linux-text-lab"
+echo "=================================="
+
+find /root/linux-text-lab -type f | sort
+
+
+执行完成后，目录和文件就全部准备好了。
+二、配套测试命令
+下面把测试文件和前面整理的命令对应起来，方便你逐条验证。
+1. grep 测试
+| 简要名称 | 命令示例 | 命令说明 |
+|---|---|---|
+| 搜索错误日志 | grep "ERROR" /root/linux-text-lab/grep/app.log | 搜索大写ERROR |
+| 忽略大小写 | grep -i "error" /root/linux-text-lab/grep/app.log | 忽略大小写搜索 |
+| 显示行号 | grep -n "ERROR" /root/linux-text-lab/grep/app.log | 显示匹配行号 |
+| 反向匹配 | grep -v "INFO" /root/linux-text-lab/grep/app.log | 显示不包含INFO的行 |
+| 统计错误数量 | grep -ic "error" /root/linux-text-lab/grep/app.log | 统计错误行数量 |
+| 前后显示 | grep -C 2 "ERROR" /root/linux-text-lab/grep/app.log | 显示匹配行前后各2行 |
+| 多关键字 | grep -E "ERROR|WARNING" /root/linux-text-lab/grep/app.log | 同时搜索错误和警告 |
+| 搜索目录 | grep -rn "ERROR" /root/linux-text-lab/grep/ | 递归搜索目录中的错误 |
+| 精确单词 | grep -w "root" /root/linux-text-lab/grep/users.txt | 匹配完整单词 |
+| 提取数字 | grep -o "[0-9]\+" /root/linux-text-lab/grep/app.log | 只输出匹配的数字 |
+
+2. find 测试
+简要名称	命令示例	命令说明
+查找文件	find /root/linux-text-lab/find -name "app.log"	按文件名查找
+查找目录	find /root/linux-text-lab/find -type d	查找所有目录
+查找普通文件	find /root/linux-text-lab/find -type f	查找所有普通文件
+查找日志文件	find /root/linux-text-lab/find -name "*.log"	查找所有日志文件
+忽略大小写	find /root/linux-text-lab/find -iname "*.TXT"	忽略文件名大小写
+查找大文件	find /root/linux-text-lab/find -size +1M	查找大于1MB的文件
+查找空文件	find /root/linux-text-lab/find -type f -empty	查找空文件
+查找空目录	find /root/linux-text-lab/find -type d -empty	查找空目录
+查找旧文件	find /root/linux-text-lab/find -mtime +7	查找7天以前修改的文件
+查找新文件	find /root/linux-text-lab/find -mtime -1	查找最近24小时修改的文件
+查找并执行	find /root/linux-text-lab/find -name "*.log" -exec ls -lh {} \;	找到日志文件并显示详细信息
+查找文件权限	find /root/linux-text-lab/find -perm 644	查找权限为644的文件
+查找并统计	find /root/linux-text-lab/find -type f \| wc -l	统计普通文件数量
+查找指定用户	find /root/linux-text-lab/find -user root	查找root拥有的文件
+查找并删除	find /root/linux-text-lab/find -name "*.tmp" -delete	删除匹配的临时文件
+
+3. sed 测试
+注意：下面的直接修改命令会改变测试文件，建议先复制一份再测试。
+简要名称		命令示例	命令说明
+字符串替换	sed 's/Linux/Unix/' /root/linux-text-lab/sed/test.txt	替换每行第一个匹配项
+全局替换		sed 's/Linux/Unix/g' /root/linux-text-lab/sed/test.txt	替换每行所有匹配项
+忽略大小写	sed 's/linux/Unix/gi' /root/linux-text-lab/sed/test.txt	忽略大小写替换
+指定行替换	sed '3s/Linux/Unix/' /root/linux-text-lab/sed/test.txt	只替换第3行
+删除指定行	sed '3d' /root/linux-text-lab/sed/test.txt		删除第3行
+删除行范围	sed '2,4d' /root/linux-text-lab/sed/test.txt		删除第2至4行
+删除空行		sed '/^$/d' /root/linux-text-lab/sed/test.txt		删除空白行
+删除注释		sed '/^#/d' /root/linux-text-lab/sed/config.conf		删除以#开头的行
+显示指定行	sed -n '3p' /root/linux-text-lab/sed/test.txt		只输出第3行
+显示行范围	sed -n '2,5p' /root/linux-text-lab/sed/test.txt		输出第2至5行
+行首添加		sed 's/^/[Linux] /' /root/linux-text-lab/sed/test.txt	每行行首添加前缀
+行尾添加		sed 's/$/ [OK]/' /root/linux-text-lab/sed/test.txt		每行行尾添加后缀
+直接修改		sed -i 's/admin/test/g' /root/linux-text-lab/sed/config.conf	直接修改文件内容
+备份修改		sed -i.bak 's/admin/test/g' /root/linux-text-lab/sed/config.conf	修改前备份为.bak文件
+插入内容		sed '3i\new line' /root/linux-text-lab/sed/test.txt		在第3行前插入内容
+追加内容		sed '3a\new line' /root/linux-text-lab/sed/test.txt		在第3行后追加内容
+
+4. awk 测试
+简要名称		命令示例								命令说明
+输出第一列	awk '{print $1}' /root/linux-text-lab/awk/students.txt			输出学生姓名
+输出多列		awk '{print $1,$2}' /root/linux-text-lab/awk/students.txt			输出姓名和成绩
+输出最后列	awk '{print $NF}' /root/linux-text-lab/awk/students.txt			输出每行最后一个字段
+统计列数		awk '{print NF}' /root/linux-text-lab/awk/students.txt			输出每行字段数量
+输出行号		awk '{print NR,$0}' /root/linux-text-lab/awk/students.txt			输出行号和整行内容
+条件筛选		awk '$2>80' /root/linux-text-lab/awk/students.txt				筛选成绩大于80的学生
+多条件筛选	awk '$2>80 && $3<22' /root/linux-text-lab/awk/students.txt		筛选成绩大于80且年龄小于22的学生
+统计行数		awk 'END{print NR}' /root/linux-text-lab/awk/students.txt			统计文件总行数
+统计总分		awk '{sum+=$2} END{print sum}' /root/linux-text-lab/awk/students.txt	计算所有学生成绩总和
+计算平均分	awk '{sum+=$2} END{print sum/NR}' /root/linux-text-lab/awk/students.txt	计算学生平均成绩
+统计状态码	awk '{count[$9]++} END{for(i in count) print i,count[i]}' /root/linux-text-lab/awk/access.log	统计HTTP状态码
+统计访问IP	awk '{count[$1]++} END{for(i in count) print i,count[i]}' /root/linux-text-lab/awk/access.log	统计每个IP的访问次数
+指定分隔符	awk -F: '{print $1}' /root/linux-text-lab/grep/users.txt			按冒号分割并输出用户名
+格式化输出	awk '{printf "%-12s %5s %5s\n",$1,$2,$3}' /root/linux-text-lab/awk/students.txt	格式化输出学生信息
+数值求和		awk '{sum+=$1} END{print sum}' /root/linux-text-lab/awk/numbers.txt	计算数字总和
+指定行范围	awk 'NR>=2 && NR<=4' /root/linux-text-lab/awk/students.txt		输出第2至4行
+
+三、测试效果验证
+创建完成后，先执行：
+cd /root/linux-text-lab
+
+分别运行：
+# grep：搜索错误
+grep -in "error" grep/app.log
+
+# find：查找日志
+find find -name "*.log"
+
+# sed：替换字符串
+sed 's/Linux/Unix/g' sed/test.txt
+
+# awk：计算平均成绩
+awk '{sum+=$2} END{print sum/NR}' awk/students.txt
+
+预期结果：
+- grep：找到3行包含 error 的记录（忽略大小写）。
+- find：找到3个 .log 文件。
+- sed：输出替换后的文本，不修改原文件。
+- awk：输出平均成绩 83.2。
+补充修正： 上面创建脚本里的大文件建议改为2MB，这样可以测试大于1MB的查找：
+dd if=/dev/zero of=/root/linux-text-lab/find/data.bin bs=1M count=2 status=none
+
+四、测试环境清理
+所有命令测试完成后，如果不需要这些测试数据，可以执行：
+rm -rf /root/linux-text-lab

@@ -1,0 +1,209 @@
+一、增加 Memo 子类，支持 Ctrl + 鼠标滚轮
+你现在创建输出框的代码是：
+S.Memo := TMemo.Create(S.Sheet);
+我们只需要将它改成自定义 Memo 类。
+
+1. 在 TStrEvent 声明下面增加：
+TSshMemo = class(TMemo)
+protected
+  procedure WMMouseWheel(var Message: TWMMouseWheel);
+    message WM_MOUSEWHEEL;
+end;
+
+2. 在 implementation 区域增加这个过程：
+procedure TSshMemo.WMMouseWheel(var Message: TWMMouseWheel);
+var
+  NewSize: Integer;
+begin
+  if (Message.Keys and MK_CONTROL) <> 0 then
+  begin
+    NewSize := Font.Size;
+
+    if Message.WheelDelta > 0 then
+      Inc(NewSize)
+    else
+      Dec(NewSize);
+
+    if NewSize < 6 then NewSize := 6;
+    if NewSize > 48 then NewSize := 48;
+
+    Font.Size := NewSize;
+    Message.Result := 1;
+  end
+  else
+    inherited;
+end;
+
+
+3. 修改原来的 Memo 创建代码：
+把：
+S.Memo := TMemo.Create(S.Sheet);
+改为：
+S.Memo := TSshMemo.Create(S.Sheet);
+其他 Memo 初始化代码全部保留。
+
+二、增加两个菜单项需要的成员声明
+找到你的 TSshSession = class(TObject)。
+原来有：
+Menu: TPopupMenu;
+
+在它下面增加这个自动换行菜单的引用，因为弹出右键菜单需要同步它的状态：
+FMenuWrap: TMenuItem;
+
+然后找到原来的事件声明：
+procedure EvCopy(Sender: TObject);
+procedure EvSelAll(Sender: TObject);
+procedure EvClearLocal(Sender: TObject);
+
+在下面增加：
+procedure EvMemoFont(Sender: TObject);
+procedure EvMemoWrap(Sender: TObject);
+procedure EvMemoMenuPopup(Sender: TObject);
+
+三、直接修改原来的 BuildMemoMenu
+你原来的代码是：
+{ 输出区右键菜单：复制 / 全选 / 清空缓冲区 }
+procedure TSshSession.BuildMemoMenu;
+var
+  MI: TMenuItem;
+begin
+  Menu := TPopupMenu.Create(Memo);
+  MI := TMenuItem.Create(Menu);
+  MI.Caption := '复制（选中内容）';
+  MI.OnClick := EvCopy;
+  Menu.Items.Add(MI);
+  MI := TMenuItem.Create(Menu);
+  MI.Caption := '全选';
+  MI.OnClick := EvSelAll;
+  Menu.Items.Add(MI);
+  MI := TMenuItem.Create(Menu);
+  MI.Caption := '-';
+  Menu.Items.Add(MI);
+  MI := TMenuItem.Create(Menu);
+  MI.Caption := '清空缓冲区';
+  MI.OnClick := EvClearLocal;
+  Menu.Items.Add(MI);
+  Memo.PopupMenu := Menu;
+end;
+
+
+直接用下面的代码替换原过程：
+{ 输出区右键菜单：复制 / 全选 / 字体 / 自动换行 / 清空缓冲区 }
+procedure TSshSession.BuildMemoMenu;
+var
+  MI: TMenuItem;
+begin
+  Menu := TPopupMenu.Create(Memo);
+
+  MI := TMenuItem.Create(Menu);
+  MI.Caption := '复制（选中内容）';
+  MI.OnClick := EvCopy;
+  Menu.Items.Add(MI);
+
+  MI := TMenuItem.Create(Menu);
+  MI.Caption := '全选';
+  MI.OnClick := EvSelAll;
+  Menu.Items.Add(MI);
+
+  MI := TMenuItem.Create(Menu);
+  MI.Caption := '-';
+  Menu.Items.Add(MI);
+
+  { 字体样式和大小 }
+  MI := TMenuItem.Create(Menu);
+  MI.Caption := '字体样式和大小...';
+  MI.OnClick := EvMemoFont;
+  Menu.Items.Add(MI);
+
+  { 自动换行 }
+  FMenuWrap := TMenuItem.Create(Menu);
+  FMenuWrap.Caption := '自动换行';
+  FMenuWrap.OnClick := EvMemoWrap;
+  Menu.Items.Add(FMenuWrap);
+
+  { 清空缓冲区 }
+  MI := TMenuItem.Create(Menu);
+  MI.Caption := '清空缓冲区';
+  MI.OnClick := EvClearLocal;
+  Menu.Items.Add(MI);
+
+  Menu.OnPopup := EvMemoMenuPopup;
+  Memo.PopupMenu := Menu;
+end;
+
+注意：这里保留了原有的菜单创建方式，只是在原来的分隔线和清空缓冲区之间增加了两个菜单项。
+四、增加三个事件过程
+把下面三个过程放在 EvClearLocal 等事件过程附近即可。
+
+1. 字体样式和大小
+procedure TSshSession.EvMemoFont(Sender: TObject);
+var
+  Dlg: TFontDialog;
+begin
+  Dlg := TFontDialog.Create(nil);
+  try
+    Dlg.Font.Assign(Memo.Font);
+    Dlg.Options := Dlg.Options + [fdShowHelp];
+
+    if Dlg.Execute then
+      Memo.Font.Assign(Dlg.Font);
+  finally
+    Dlg.Free;
+  end;
+end;
+
+点击后弹出 Windows 字体对话框，可以设置字体、字形和字号。
+
+2. 自动换行
+procedure TSshSession.EvMemoWrap(Sender: TObject);
+begin
+  Memo.WordWrap := not Memo.WordWrap;
+
+  if Memo.WordWrap then
+    Memo.ScrollBars := ssVertical
+  else
+    Memo.ScrollBars := ssBoth;
+
+  FMenuWrap.Checked := Memo.WordWrap;
+end;
+
+
+3. 右键菜单弹出时同步 √ 状态
+procedure TSshSession.EvMemoMenuPopup(Sender: TObject);
+begin
+  FMenuWrap.Checked := Memo.WordWrap;
+end;
+
+
+这里特意使用 Menu.OnPopup，这样即使以后通过其他代码修改了 Memo.WordWrap，右键菜单显示的 √ 也会同步。
+五、确认默认设置
+你原来的初始化代码已经有：
+S.Memo.ScrollBars := ssBoth;
+S.Memo.WordWrap := False;
+S.Memo.Font.Name := 'Consolas';
+S.Memo.Font.Size := 10;
+
+这部分不用修改。
+
+默认就是不自动换行，字体 Consolas，字号 10。
+
+六、最终效果
+SSH 输出区右键菜单
+复制（选中内容）
+全选
+
+字体样式和大小...
+√自动换行
+
+清空缓冲区
+
+上图仅示意自动换行开启后的菜单状态。
+
+操作	效果
+右键字体样式和大小	弹出字体设置对话框
+右键自动换行	切换换行，菜单同步 √
+Ctrl + 滚轮向上	字体增大
+Ctrl + 滚轮向下	字体减小
+普通鼠标滚轮	保持原来的滚动行为
+
+最后说明： 这套修改中，字体和自动换行都是当前 TSshSession.Memo 自己的属性，因此每个 SSH 标签页互不影响。没有修改 SSH 命令执行、输出处理、缓冲区保护等原有逻辑。

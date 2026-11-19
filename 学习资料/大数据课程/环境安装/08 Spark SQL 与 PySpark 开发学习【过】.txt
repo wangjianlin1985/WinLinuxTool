@@ -1,1 +1,82 @@
-安装环境不用学习后面再学
+主要是学习如何使用 Python 和 SQL 操作 Spark，完成大数据的读取、清洗、转换、统计和分析。
+
+第 08 课就正式进入 Spark 编程开发阶段。
+一、这一课主要学什么？
+我建议分成四个部分：
+1. RDD 编程基础
+Spark 最基础的数据抽象，学习分布式数据处理。
+底层编程基础
+
+2. DataFrame 编程
+使用类似表格的结构处理数据，是实际开发中非常重要的 API。
+重点掌握
+
+3. Spark SQL
+使用 SQL 查询分布式数据，例如 SELECT、WHERE、GROUP BY、JOIN。
+重点掌握
+
+4. PySpark 开发
+使用 Python 编写 Spark 程序，掌握数据读取、清洗、统计和分析。
+重点掌握
+
+二、RDD、DataFrame、SQL 到底是什么关系？
+这三个是 Spark 数据处理的核心概念。
+
+假设我们有一份员工数据：
+姓名	部门	工资
+张三	技术部	12000
+李四	销售部	8000
+王五	技术部	15000
+赵六	销售部	9000
+
+现在我们想统计每个部门的平均工资。
+RDD：通过代码处理数据
+rdd = sc.parallelize([    ("张三", "技术部", 12000),    ("李四", "销售部", 8000),    ("王五", "技术部", 15000),    ("赵六", "销售部", 9000)])result = (    rdd.map(lambda x: (x[1], (x[2], 1)))       .reduceByKey(           lambda a, b: (a[0] + b[0], a[1] + b[1])       )       .mapValues(lambda x: x[0] / x[1]))print(result.collect())
+
+DataFrame：通过表格操作数据
+df.groupBy("部门") \  .avg("工资") \  .show()
+
+Spark SQL：直接使用 SQL 语句
+df.createOrReplaceTempView("employees")spark.sql("""    SELECT 部门, AVG(工资) AS 平均工资    FROM employees    GROUP BY 部门""").show()
+
+
+
+三种方式实现的是同一个目标。
+三、建议第 08 课的具体课程安排
+我建议拆分成 8 个小节，循序渐进。
+编号	课程内容	学习重点
+08-01	Spark 开发环境与 SparkSession	Python 开发环境、SparkSession
+08-02	RDD 基础编程	parallelize、map、filter、reduce
+08-03	RDD 高级操作	flatMap、groupByKey、reduceByKey、join
+08-04	DataFrame 基础	创建 DataFrame、Schema、列操作
+08-05	DataFrame 数据处理	filter、select、withColumn、groupBy
+08-06	Spark SQL	临时视图、SQL 查询、JOIN、聚合
+08-07	PySpark 综合开发	CSV、JSON、Parquet 文件处理
+08-08	综合实战项目	员工数据分析系统
+
+四、实际开发中使用什么？
+这部分比较重要。
+技术	主要用途	学习优先级
+RDD	底层分布式数据处理	掌握基础
+DataFrame	结构化数据处理	非常高
+Spark SQL	SQL 数据分析	非常高
+PySpark	Python 开发 Spark 应用	非常高
+
+现在的 Spark 开发，主要围绕 DataFrame 和 Spark SQL 展开。
+
+RDD 也需要学习，但不需要把它作为主要开发方式。
+五、这一课最终要达到什么效果？
+完成第 08 课后，我们应该能够：
+1. 使用 Python 编写 Spark 程序。
+2. 使用 RDD 完成分布式数据处理。
+3. 使用 DataFrame 读取和处理 CSV、JSON、Parquet。
+4. 使用 Spark SQL 编写复杂 SQL 查询。
+5. 使用 PySpark 实现数据清洗、统计和分析。
+6. 将 Spark 程序提交到 Linux 上的 YARN 集群运行。
+7. 查看 YARN 应用运行状态和执行日志。
+特别是最后一点，我们要把第 07 课配置的 YARN 环境真正利用起来。
+
+我的建议：
+第 08 课采用 Python（PySpark）作为主要开发语言，同时学习 Spark SQL。RDD 作为基础知识讲解。
+每个小节都提供完整代码、运行命令、预期输出和实验结果。最后编写一个完整的数据分析项目，分别测试 YARN Client 和 YARN Cluster 两种运行模式。
+这样学完以后，就不只是会安装 Spark，而是真正能够使用 Spark 开发大数据程序了。

@@ -1,0 +1,140 @@
+1. 引入 Registry 单元
+在 MainForm.pas 的 uses 中增加：
+Registry,
+
+
+2. 增加菜单变量【这2个菜单声明需要放到private声明区，否则编译】
+找到 TfrmMain 的private组件声明区域增加：
+miAutoStartSep: TMenuItem;
+miAutoStart: TMenuItem;
+采用了动态创建菜单的方式，如果声明在了窗体组件声明区域，导致 Delphi 认为它应该是 DFM 中设计好的组件。
+编译会提示报错，所以需要再private区域声明哈
+
+3. 增加事件声明
+在 TfrmMain 的过程声明区域增加：
+procedure miAutoStartClick(Sender: TObject);
+
+
+在 private 区域增加：
+procedure SyncAutoStart;
+
+
+4. 在 FormCreate 中动态添加菜单
+找到：
+BuildMainTabs;
+FillCategories(0);
+
+
+在这两行之后增加：
+{ 添加开机启动菜单 }
+miAutoStartSep := TMenuItem.Create(Self);
+miAutoStartSep.Caption := '-';
+miSession.Add(miAutoStartSep);
+
+miAutoStart := TMenuItem.Create(Self);
+miAutoStart.Caption := '开机启动';
+miAutoStart.OnClick := miAutoStartClick;
+miSession.Add(miAutoStart);
+
+{ 读取注册表中的开机启动状态 }
+SyncAutoStart;
+
+
+这样菜单会自动添加到「会话」菜单最后面。
+5. 增加注册表状态读取过程
+在 MainForm.pas 中增加：
+procedure TfrmMain.SyncAutoStart;
+const
+  RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  RunName = 'WinLinuxTool_AutoStart';
+var
+  Reg: TRegistry;
+  ExeValue: string;
+begin
+  miAutoStart.Checked := False;
+
+  Reg := TRegistry.Create;
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+
+    if not Reg.OpenKey(RunKey, False) then Exit;
+
+    if Reg.ValueExists(RunName) then
+    begin
+      ExeValue := '"' + ExpandFileName(Application.ExeName) + '"';
+
+      { EXE 移动后自动更新启动路径 }
+      if not SameText(Reg.ReadString(RunName), ExeValue) then
+        Reg.WriteString(RunName, ExeValue);
+
+      miAutoStart.Checked := True;
+    end;
+
+    Reg.CloseKey;
+  finally
+    Reg.Free;
+  end;
+end;
+
+
+6. 增加菜单点击事件
+procedure TfrmMain.miAutoStartClick(Sender: TObject);
+const
+  RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  RunName = 'WinLinuxTool_AutoStart';
+var
+  Reg: TRegistry;
+  ExeValue: string;
+begin
+  Reg := TRegistry.Create;
+  try
+    try
+      Reg.RootKey := HKEY_CURRENT_USER;
+
+      if not Reg.OpenKey(RunKey, True) then
+      begin
+        ShowMessage('无法打开 Windows 开机启动注册表项！');
+        Exit;
+      end;
+
+      if Reg.ValueExists(RunName) then
+      begin
+        { 取消开机启动 }
+        Reg.DeleteValue(RunName);
+        miAutoStart.Checked := False;
+      end
+      else
+      begin
+        { 开启开机启动 }
+        ExeValue := '"' + ExpandFileName(Application.ExeName) + '"';
+
+        Reg.WriteString(RunName, ExeValue);
+        miAutoStart.Checked := True;
+      end;
+
+      Reg.CloseKey;
+    except
+      on E: Exception do
+        ShowMessage('设置开机启动失败：' + E.Message);
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
+
+7. 最终验证
+测试		预期效果
+第一次运行	开机启动前没有 √
+点击开机启动	出现 √
+再次点击		√ 消失
+重启电脑		已启用时自动启动
+移动 EXE 后手动运行	自动更新注册表路径
+再次重启		从新位置启动
+
+最终修改范围
+- MainForm.pas：增加 Registry、两个菜单变量、一个事件声明、一个状态同步过程和一个点击事件。
+- MainForm.dfm：不修改。
+- commands.json：不修改。
+- 不需要管理员权限。
+补充： 这里使用的是 HKEY_CURRENT_USER\...\Run，所以是在当前 Windows 用户登录时自动启动，而不是电脑开机进入登录界面之前启动。

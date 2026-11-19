@@ -1,0 +1,278 @@
+学习内容：
+1. Spark ThriftServer 的工作原理。
+2. Spark ThriftServer 配置。
+3. Spark 与 Hive Metastore 集成。
+4. Beeline 连接 Spark SQL。
+5. Java JDBC 连接 Spark SQL。
+6. Spark SQL 读取 HDFS 数据。
+7. Hive SQL 和 Spark SQL 执行效果对比。
+这样，你的伪分布式环境就不只是把软件安装起来，而是真正具备通过 SQL 和 Java 程序使用 Spark 计算引擎的能力。
+
+现在就把 Spark ThriftServer（Spark SQL 服务） 补上。
+你之前已经完成了 Hadoop、Hive、Spark 等组件的伪分布式环境部署，现在不需要重新安装 Spark，只需要在现有 Spark 环境上补充 ThriftServer 配置、启动服务和连接测试。
+这一步完成后，你的环境将具备Spark SQL 服务架构： 
+Java JDBC 程序 / Beeline
+      SQL 客户端
+	↓
+Spark ThriftServer
+提供 HiveServer2 兼容的 JDBC/ODBC SQL 服务，默认端口 10000，因为hiveserver2占用了我们通过命令行启动指定10001，就不用复制hive.site.xml到spark目录去修改端口配置了
+	↓
+Spark SQL 引擎
+负责 SQL 解析、优化和计算执行
+	↓
+Hive Metastore		HDFS
+元数据管理		数据存储
+注意：ThriftServer 是 SQL 服务入口，不是新的计算引擎。真正执行 SQL 计算的是 Spark。
+
+1. 配置 Spark 与 Hive 集成
+1.1 将 Hive 配置复制到 Spark【实则这一步可以不做，可能是系统有HIVE_HOME的环境变量吧】
+使用 dsj_admin 用户执行：
+cp $HIVE_HOME/conf/hive-site.xml $SPARK_HOME/conf/  这一步非常重要。
+它让 Spark 能够读取 Hive 的配置，尤其是：
+<property>
+    <name>hive.metastore.uris</name>
+    <value>thrift://master:9083</value>
+</property>
+这样 Spark SQL 就能连接你已经运行的 Hive Metastore。
+
+【官方 Spark 4.0.5 文档说明，内置 Hive Metastore 客户端是 2.3.10；如果要使用 Hive 4.1.0 客户端，需要使用对应的 Maven 或外部 JAR 配置】
+【之前是Spark4.0.5不支持park.sql.hive.metastore.version 4.1.0的依赖，需要自己设置4.0.x的依赖可以连接hive4.1.0】
+【然后我觉得还要maven在线下载依赖，或者自己下载4.0.x的依赖包但是又提示不全，所以我干脆升级到了spark4.1.0】
+2  编辑 Spark 配置文件：vim $SPARK_HOME/conf/spark-defaults.conf
+在在之前的模式2后面增加以下配置
+
+# ==========================================
+# Spark SQL / Hive Integration
+# ==========================================
+spark.sql.catalogImplementation hive
+# Hive Metastore 客户端版本
+park.sql.hive.metastore.version 4.1.0
+# 使用本地 Hive JAR
+spark.sql.hive.metastore.jars path
+# 本地 Hive 依赖目录
+spark.sql.hive.metastore.jars.path file:///usr/local/bigdata/hive/lib/*
+
+检查 HDFS 与 YARN
+启动 ThriftServer 前，确认 HDFS 和 YARN 已正常运行：
+hdfs dfs -ls /
+yarn node -list
+确认 Hive Metastore 可访问：nc -zv master 9083
+如果显示 succeeded 或 Connected，说明 TCP 端口可连接。
+
+3. 检查 HDFS 与 YARN
+启动 ThriftServer 前，确认 HDFS 和 YARN 已正常运行：
+hdfs dfs -ls /
+yarn node -list
+确认 Hive Metastore 可访问：
+nc -zv master 9083
+如果显示 succeeded 或 Connected，说明 TCP 端口可连接。
+
+5. 启动 Spark ThriftServer
+先执行启动命令：
+$SPARK_HOME/sbin/start-thriftserver.sh \
+--master yarn \
+--deploy-mode client \
+--hiveconf hive.server2.thrift.port=10001 \
+--hiveconf hive.server2.thrift.bind.host=0.0.0.0
+
+这里暂时使用 Client 模式运行 Driver，便于我们调试和查看日志。
+启动后检查：jps
+正常情况下应该能看到 Spark SQL 相关进程，可能会出现类似：
+HiveThriftServer2
+再检查端口：
+ss -lntp | grep 10001
+预期出现监听：
+*:10001
+
+6. 如果启动失败，查看日志
+先不要反复启动，执行：
+ls -lt $SPARK_HOME/logs | head
+然后查看最新的日志：
+tail -n 100 $SPARK_HOME/logs/*thriftserver*
+如果日志文件名称不匹配，再根据 ls -lt 找最新日志文件查看即可。
+
+7 Spark ThriftServer 本质上也是一个 Spark 应用程序。它启动时读取 spark-defaults.conf，和你自己使用 spark-submit 提交程序读取的配置是同一套机制。
+你原来的配置：
+spark.master yarn
+spark.submit.deployMode client
+代表默认情况下：
+- Spark 任务提交到 YARN。
+- Driver 默认运行在提交任务的客户端机器。
+- Executor 由 YARN 分配到集群节点运行。
+- Python 环境变量继续生效。
+因此，原来的 Java Spark 程序仍然可以这样提交：
+spark-submit \
+--class com.example.SparkApp \
+/data/spark-app/spark-demo.jar
+
+也可以单独指定运行模式，例如：
+spark-submit \
+--master yarn \
+--deploy-mode client \
+--class com.example.SparkApp \
+/data/spark-app/spark-demo.jar
+
+你的 spark-defaults.conf 继续保留原样的 YARN Mode 配置，只增加 Spark SQL 必要的参数，不要重复定义 spark.master 和 spark.submit.deployMode。
+也就是说你的 Spark 环境继续支持：
+使用方式			是否支持		运行模式
+spark-submit 提交 Java 程序	支持		YARN Client
+Spark Shell		支持		YARN
+PySpark			支持		YARN
+Spark ThriftServer		支持		YARN Client
+Beeline 连接 Spark SQL	支持		经 ThriftServer
+Java JDBC 连接 Spark SQL	支持		经 ThriftServer
+所以你原来的模式2不要改。 我们这次只是给 Spark 增加一个 SQL 服务入口，而不是改变 Spark 的运行模式。
+
+8 创建一个java的Maven工程：
+pom.xml文件写入以下内容：
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.demo</groupId>
+    <artifactId>SparkJdbcDemo</artifactId>
+    <version>1.0</version>
+
+    <properties>
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.hive</groupId>
+            <artifactId>hive-jdbc</artifactId>
+            <version>2.3.10</version>
+        </dependency>
+    </dependencies>
+</project>
+
+然后新建一个包com包下面创建一个java类SparkJdbcDemo写入下面的代码【这里分析的hive表还是之前章节现成的表哈】:
+package  com;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
+import java.sql.ResultSet;
+
+public class SparkJdbcDemo {
+
+    // Spark ThriftServer 地址
+    private static final String URL =
+            "jdbc:hive2://192.168.79.10:10001/default";
+
+    public static void main(String[] args) {
+
+        Connection conn = null;
+        Statement stmt = null;
+        ResultSet rs = null;
+
+        try {
+            // 1. 加载 JDBC 驱动
+            Class.forName("org.apache.hive.jdbc.HiveDriver");
+
+            // 2. 连接 Spark ThriftServer
+            conn = DriverManager.getConnection(
+                    URL, "dsj_admin", ""
+            );
+
+            System.out.println("Spark ThriftServer 连接成功！");
+
+            stmt = conn.createStatement();
+
+            // 3. 切换数据库
+            stmt.execute("USE test_dw");
+
+            // 4. 查看数据库中的表
+            System.out.println("\n===== 数据表列表 =====");
+
+            rs = stmt.executeQuery("SHOW TABLES");
+
+            while (rs.next()) {
+                System.out.println(rs.getString(1));
+            }
+
+            rs.close();
+
+            // 5. 查看 student 表结构
+            System.out.println("\n===== student 表结构 =====");
+
+            rs = stmt.executeQuery("DESC student");
+
+            while (rs.next()) {
+                System.out.println(
+                        rs.getString(1) + "\t" +
+                                rs.getString(2)
+                );
+            }
+
+            rs.close();
+
+            // 6. 查询 student 表数据
+            System.out.println("\n===== student 表数据 =====");
+
+            rs = stmt.executeQuery(
+                    "SELECT id, name, age " +
+                            "FROM test_dw.student ORDER BY id"
+            );
+
+            System.out.printf("%-10s %-15s %-10s%n",
+                    "ID", "姓名", "年龄");
+
+            while (rs.next()) {
+                System.out.printf("%-10d %-15s %-10d%n",
+                        rs.getInt("id"),
+                        rs.getString("name"),
+                        rs.getInt("age")
+                );
+            }
+
+            rs.close();
+
+            // 7. 统计学生人数
+            System.out.println("\n===== 学生人数统计 =====");
+
+            rs = stmt.executeQuery(
+                    "SELECT COUNT(*) AS total FROM test_dw.student"
+            );
+
+            if (rs.next()) {
+                System.out.println(
+                        "学生总人数：" + rs.getInt("total")
+                );
+            }
+
+            rs.close();
+
+            System.out.println("\nSpark SQL JDBC 测试完成！");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+
+        } finally {
+            try {
+                if (rs != null) rs.close();
+                if (stmt != null) stmt.close();
+                if (conn != null) conn.close();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+
+
+然后直接在idea运行看分析结果，超级方便！
+
+
+
+
+
+
+
+

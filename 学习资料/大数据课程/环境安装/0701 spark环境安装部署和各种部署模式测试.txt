@@ -1,5 +1,6 @@
 本节在前面 Hadoop 3.5.0、HDFS、YARN 环境的基础上安装 Spark 4.0.5。
 这次按照后续能够扩展到真正分布式集群的方式配置，不使用 localhost，统一使用 master 主机名。
+【但是后面发现Hive4.1.0和Spark4.0.5兼容性不好，果然升级了Spark4.1.0不影响安装步骤，都一样哈，后面涉及spark的地方都是4.1.0版本为准哈】
 
 一、本节部署规划
 Linux 服务器主要运行环境
@@ -11,7 +12,7 @@ Hadoop	3.5.0
 Spark	4.0.5
 Java	JDK 17
 JAVA_HOME	/usr/local/bigdata/jdk
-Python	/usr/bin/python3
+Python	/usr/bin/python3.11
 
 安装目录	/usr/local/bigdata
 Spark 安装目录
@@ -41,7 +42,7 @@ echo $JAVA_HOME
 ls -ld /usr/local/bigdata/jdk
 
 2. 检查 Python
-/usr/bin/python3 --version
+/usr/bin/python3.11 --version
 Spark 4.0 系列要求 Python 3.9 及以上。
 
 3. 检查 Hadoop 和 YARN
@@ -118,8 +119,8 @@ export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
 export YARN_CONF_DIR=$HADOOP_HOME/etc/hadoop
 
 # Python
-export PYSPARK_PYTHON=/usr/bin/python3
-export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+export PYSPARK_PYTHON=/usr/bin/python3.11
+export PYSPARK_DRIVER_PYTHON=/usr/bin/python3.11
 
 # ==========================================
 # Spark Standalone Configuration
@@ -128,11 +129,11 @@ export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
 
 # export SPARK_MASTER_HOST=master
 # export SPARK_MASTER_PORT=7077
-# export SPARK_MASTER_WEBUI_PORT=8080
+# export SPARK_MASTER_WEBUI_PORT=8090
 
 # export SPARK_WORKER_CORES=2
 # export SPARK_WORKER_MEMORY=2g
-# export SPARK_WORKER_WEBUI_PORT=8081
+# export SPARK_WORKER_WEBUI_PORT=8091
 
 # ==========================================
 # Spark Network Configuration
@@ -177,8 +178,8 @@ SPARK_MASTER_HOST、SPARK_WORKER_CORES 等参数属于 Standalone 模式，YARN 
 spark.eventLog.enabled                  false
 
 # Python
-spark.pyspark.python                     /usr/bin/python3
-spark.pyspark.driver.python              /usr/bin/python3
+spark.pyspark.python                     /usr/bin/python3.11
+spark.pyspark.driver.python              /usr/bin/python3.11
 
 # Resource
 spark.executor.cores                     1
@@ -202,8 +203,8 @@ spark.master                             yarn
 spark.submit.deployMode                  client
 
 # Python Environment for YARN
-spark.yarn.appMasterEnv.PYSPARK_PYTHON   /usr/bin/python3
-spark.yarn.appMasterEnv.PYSPARK_DRIVER_PYTHON /usr/bin/python3
+spark.yarn.appMasterEnv.PYSPARK_PYTHON   /usr/bin/python3.11
+spark.yarn.appMasterEnv.PYSPARK_DRIVER_PYTHON /usr/bin/python3.11
 
 # ==========================================
 # 3. Standalone Mode
@@ -617,7 +618,7 @@ spark-submit \
 --mode standalone-client
 
 查看 Web UI：
-- Spark Master：http://master:8080
+- Spark Master：http://master:8090
 - YARN ResourceManager：http://master:8088
 
 3. 预期测试结果
@@ -910,7 +911,7 @@ mvn clean package
 应该能看到：
 Master
 Worker
-打开 Spark Master Web UI：http://master:8080
+打开 Spark Master Web UI：http://master:8090
 确认 Worker 状态为 ALIVE。
 
 6、提交 Standalone Cluster 任务

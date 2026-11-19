@@ -113,7 +113,7 @@ Rocky Linux 通常会安装在：/usr/lib/jvm/
 创建软连接：sudo ln -sfn /usr/lib/jvm/java-17-openjdk /usr/local/bigdata/jdk
 我们后续统一使用：export JAVA_HOME=/usr/local/bigdata/jdk
 
-3.7 安装 Python 3.11【rocky9.8竟然自带python3.9这个也先不要安装】
+3.7 安装 Python 3.11【rocky9.8竟然自带python3.9但是因为spark4.1.0要求python3.10以上版本所以还是安装】
 Rocky Linux 9 可以通过 DNF 安装 Python 3.11。
 执行：dnf install -y python3.11 python3.11-pip
 检查：
@@ -145,13 +145,13 @@ export JAVA_HOME=/usr/local/bigdata/jdk
 export PYTHON_HOME=/usr/bin
 
 # 指定 PySpark 使用的 Python
-export PYSPARK_PYTHON=/usr/bin/python3
+export PYSPARK_PYTHON=/usr/bin/python3.11
 
 # 指定 Spark Driver 使用的 Python
-export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+export PYSPARK_DRIVER_PYTHON=/usr/bin/python3.11
 
 # 指定 PyFlink 使用的 Python
-export PYFLINK_CLIENT_EXECUTABLE=/usr/bin/python3
+export PYFLINK_CLIENT_EXECUTABLE=/usr/bin/python3.11
 
 # Java 可执行程序目录
 export PATH=$JAVA_HOME/bin:$PATH

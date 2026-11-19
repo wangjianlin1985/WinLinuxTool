@@ -1,0 +1,55 @@
+只需要修改 SshPane.pas 中的一行代码，不需要改其他地方，也不需要修改文件编码。
+1. Bug 原因
+找到这个过程：
+procedure TSshPane.EvCatRename(Sender: TObject);
+
+
+目前你的代码是：
+for I := 0 to FLinux.Count - 1 do
+  if LineField(FLinux[I], 0) = Old then
+    FLinux[I] := New + '|' + LineField(FLinux[I], 1) + '|' + LineField(FLinux[I], 2) + '|' + LineField(FLinux[I], 3);
+
+
+问题就在最后一行。
+
+你的程序实际上已经有一套完整的字段转义机制：
+- EscapeField()：将字段内容中的 | 转换为 \|。
+- UnEscapeField()：读取时还原 |。
+- LineField()：能够正确识别经过转义的字段分隔符。
+而且你在 EvCmdEdit 编辑命令时，已经正确使用了 EscapeField()。
+
+但是分类重命名时，重新拼接命令记录却没有使用 EscapeField()。
+
+例如：
+
+原始命令：
+ss -tlnp | grep :80
+
+
+重命名分类时，LineField() 取出的已经是还原后的原始命令。
+
+直接拼接就会导致内部的 | 被误认为字段分隔符。
+2. 修改方法
+把原来的这一行：
+FLinux[I] := New + '|' + LineField(FLinux[I], 1) + '|' + LineField(FLinux[I], 2) + '|' + LineField(FLinux[I], 3);
+
+
+替换为下面这一行：
+FLinux[I] := EscapeField(New) + '|' + EscapeField(LineField(FLinux[I], 1)) + '|' + EscapeField(LineField(FLinux[I], 2)) + '|' + EscapeField(LineField(FLinux[I], 3)) + '|' + EscapeField(LineField(FLinux[I], 4));
+
+
+注意：我这里还补上了第 5 个字段 sample，避免分类重命名时丢失命令示例参数。
+3. 修改后的效果
+操作	结果
+重命名分类	正常
+命令包含 \|	正常保留
+命令包含多个 \|	正常保留
+命令描述包含 \|	正常保留
+命令示例包含 \|	正常保留
+JSON 保存和重新加载	正常
+
+另外，你的 RefreshCmdUI 已经会自动调用 SaveLinuxCmds，所以不需要额外增加保存代码。
+
+我的建议：就改这一行即可。
+
+不需要修改 EscapeField、UnEscapeField、LineField，也不需要修改 JSON 保存逻辑。

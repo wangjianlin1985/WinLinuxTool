@@ -1,0 +1,461 @@
+本节我们继续按照你的 A方案：单机伪分布式大数据环境 来部署 Flink。
+这次部署沿用你前面 Hadoop、Hive、Kafka 的目录规划，统一使用：
+项目		路径 / 配置
+Flink 安装目录	/usr/local/bigdata/flink
+Flink 数据目录	/data/flink
+日志目录		/data/flink/log
+Checkpoint目录	/data/flink/checkpoints
+Savepoint目录	/data/flink/savepoints
+环境变量配置文件	/etc/profile.d/bigdata.sh
+运行模式		单机伪分布式
+JobManager	master
+TaskManager	master（本机运行）
+本次我们部署的是 Flink Standalone 集群模式。虽然只有一台 Linux 主机，但 JobManager 和 TaskManager 分别以独立进程运行，学习和测试环境配置与实际集群相近
+
+一、Flink 的运行架构 
+Flink 主要有两个核心角色：
+1. JobManager（作业管理器）
+JobManager 是 Flink 的管理中心，主要负责：
+- 接收用户提交的 Flink 作业
+- 分析任务并生成执行计划
+- 将任务分配给 TaskManager
+- 管理任务运行状态
+- 负责 Checkpoint 协调
+- 任务失败后进行调度恢复
+可以把 JobManager 理解成 Kubernetes 的控制管理角色，负责安排任务，但真正执行数据计算的是 TaskManager。
+
+2. TaskManager（任务执行器）
+TaskManager 是实际执行计算任务的进程，负责：
+- 执行 Flink DataStream 等计算任务
+- 接收上游数据
+- 执行过滤、转换、聚合等操作
+- 将数据发送给下游任务
+- 提供 Task Slots（任务槽位）
+3. Task Slots（任务槽位）
+TaskManager 启动后可以配置多个 Slot。
+
+例如：
+JobManager
+    |
+    +---- TaskManager
+              |
+              +---- Slot 0
+              +---- Slot 1
+              +---- Slot 2
+              +---- Slot 3
+Slot 是 Flink 用来分配计算资源的逻辑单位。后面我们学习 DataStream 时会进一步理解 Slot、并行度以及算子之间的关系。
+
+二、创建 Flink 数据目录
+按照你的规划，所有 Flink 运行数据统一放在 /data/flink 下。执行：
+mkdir -p /data/flink/log
+mkdir -p /data/flink/checkpoints
+mkdir -p /data/flink/savepoints
+
+检查目录：ls -R /data/flink
+
+目录用途：
+目录			作用
+/data/flink/log		Flink运行日志
+/data/flink/checkpoints	自动Checkpoint存储目录
+/data/flink/savepoints	手动保存作业状态目录
+
+Checkpoint（检查点）
+Flink 在运行过程中自动或按配置周期保存任务状态，用于故障恢复。
+例如：
+每60秒保存一次任务状态
+当程序异常退出或节点故障时，可以根据之前保存的状态恢复计算。
+
+Savepoint（保存点）
+通常由用户主动触发，用于手动保存任务状态。
+例如：
+- 修改程序版本
+- 升级 Flink 作业
+- 停止任务后重新启动
+- 调整任务并行度
+Checkpoint 偏向自动容错，Savepoint 偏向主动运维与迁移。
+
+三、设置 Flink 目录权限
+如果你是使用 dsj_admin 用户安装和运行前面的 Hadoop、Kafka 等环境，那么这里也统一使用该用户。
+执行：chown -R dsj_admin:dsj_admin /data/flink
+检查权限：
+ls -ld /data/flink
+ls -l /data/flink
+
+预期类似：
+drwxr-xr-x dsj_admin dsj_admin /data/flink
+这样 Flink 运行过程中就可以正常创建日志文件、Checkpoint 和 Savepoint。
+
+四、配置 Flink 环境变量
+你的 Flink 版本是 Flink 2.2.1，安装目录已经确定为：/usr/local/bigdata/flink
+Flink 2.2.1 使用的是 config.yaml，不是旧版本教程中的 flink-conf.yaml。我们后面所有配置都以你机器上的 config.yaml 为准。
+
+1. 编辑大数据环境变量文件
+vi /etc/profile.d/bigdata.sh
+追加Flink 环境变量：
+# ==========================================
+# Apache Flink 环境变量
+# ==========================================
+export FLINK_HOME=/usr/local/bigdata/flink
+export FLINK_LOG_DIR=/data/flink/log
+export PATH=$FLINK_HOME/bin:$PATH
+
+2. 重新加载环境变量
+source /etc/profile.d/bigdata.sh
+检查：echo $FLINK_HOME
+预期：/usr/local/bigdata/flink
+检查 Flink 命令：which flink
+预期类似：/usr/local/bigdata/flink/bin/flink
+
+3. 查看 Flink 版本
+flink --version
+确认版本为：
+Version: 2.2.1
+
+五、配置 Flink 伪分布式运行环境
+Flink 2.2.1 的配置文件：/usr/local/bigdata/flink/conf/config.yaml
+先备份原始配置文件。
+cd $FLINK_HOME/conf
+cp config.yaml config.yaml.bak
+查看当前配置：cat config.yaml
+
+1. 修改 config.yaml
+编辑：vi $FLINK_HOME/conf/config.yaml
+将以下配置调整为我们这套单机伪分布式环境：
+
+# ==============================================================================
+# Flink 2.2.2 - Single Node Pseudo-Distributed Configuration
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Java 17 compatibility options
+# ------------------------------------------------------------------------------
+env:
+  java:
+    opts:
+      all: --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.base/java.time=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED
+
+  # Flink log configuration
+  log:
+    dir: /data/flink/log
+    level: INFO
+    max: 10
+
+# ------------------------------------------------------------------------------
+# JobManager
+# ------------------------------------------------------------------------------
+jobmanager:
+  bind-host: 0.0.0.0
+  rpc:
+    address: master
+    port: 6123
+  memory:
+    process:
+      size: 1024m
+  execution:
+    failover-strategy: region
+
+# ------------------------------------------------------------------------------
+# TaskManager
+# ------------------------------------------------------------------------------
+taskmanager:
+  bind-host: 0.0.0.0
+  host: master
+  numberOfTaskSlots: 2
+  memory:
+    process:
+      size: 1536m
+
+# ------------------------------------------------------------------------------
+# Parallelism
+# ------------------------------------------------------------------------------
+parallelism:
+  default: 2
+
+# ------------------------------------------------------------------------------
+# Checkpointing & Savepoints
+# ------------------------------------------------------------------------------
+execution:
+  checkpointing:
+    storage: filesystem
+    interval: 60s
+    dir: file:///data/flink/checkpoints
+    savepoint-dir: file:///data/flink/savepoints
+    mode: EXACTLY_ONCE
+    timeout: 10min
+    max-concurrent-checkpoints: 1
+
+# ------------------------------------------------------------------------------
+# REST & Web UI
+# ------------------------------------------------------------------------------
+rest:
+  address: master
+  bind-address: 0.0.0.0
+  port: 8081
+
+# ------------------------------------------------------------------------------
+# Temporary directories
+# ------------------------------------------------------------------------------
+io:
+  tmp:
+    dirs: /data/flink/tmp
+
+下面这张表可以直接对照原版 config.yaml 理解，哪些是保留的、哪些是修改的、哪些是新增的。
+原版配置					本次配置		修改原因
+env.java.opts.all				保留		Java 17兼容参数
+jobmanager.bind-host: localhost		0.0.0.0		允许外部网络访问
+jobmanager.rpc.address: localhost		master		使用主机名通信
+jobmanager.rpc.port: 6123			保留		JobManager RPC端口
+jobmanager.memory.process.size: 1600m	1024m		控制单机资源占用
+taskmanager.bind-host: localhost		0.0.0.0		允许网络通信
+taskmanager.host				master		固定TaskManager通信地址
+numberOfTaskSlots: 1			2		增加计算槽位
+taskmanager.memory.process.size: 1728m	1536m		调整TaskManager内存
+parallelism.default: 1			2		默认并行度调整为2
+rest.address: localhost			master		Web接口访问地址
+rest.bind-address				0.0.0.0		允许外部访问Web UI
+rest.port: 8081				保留		Web UI端口
+原版日志默认目录				/data/flink/log	统一日志管理
+原版Checkpoint未启用			60秒		本次实验启用自动Checkpoint
+原版Checkpoint目录示例			/data/flink/checkpoints	使用本地数据目录
+原版Savepoint目录示例			/data/flink/savepoints	使用本地数据目录
+原版临时目录 /tmp				/data/flink/tmp		统一管理临时文件
+
+Checkpoint 配置中的 storage: filesystem、dir、savepoint-dir 采用 Flink 2.2 对应的配置项；日志目录也使用新版 env.log.dir 配置。 
+
+六、配置 Flink 日志目录
+Flink 的日志目录不属于 Checkpoint 数据目录。我们把日志统一放到：/data/flink/log
+1. 编辑 flink-env.sh【配置目录没有这个文件我们直接写入了bigdata.sh】
+vi $FLINK_HOME/conf/flink-env.sh
+在文件末尾添加：export FLINK_LOG_DIR=/data/flink/log
+
+2. 创建临时目录
+mkdir -p /data/flink/tmp
+检查：
+ls -ld /data/flink/*
+
+3. 设置权限
+chown -R dsj_admin:dsj_admin /data/flink
+
+七、配置 Flink Master 和 Worker
+Standalone 模式下，Flink 通过 masters 和 workers 文件指定管理节点和计算节点。
+虽然本次只有一台机器，但我们仍然分别配置 JobManager 和 TaskManager。
+1. 配置 masters
+vi $FLINK_HOME/conf/masters
+内容：
+master:8081
+这里的 master 是你前面设置的 Linux 主机名，8081 是 Web UI 端口。
+
+2. 配置 workers
+vi $FLINK_HOME/conf/workers
+内容：
+master
+代表 TaskManager 在 master 主机启动。
+
+3. 检查主机名解析
+hostname
+检查：ping -c 2 master
+如果无法解析，检查 /etc/hosts：
+vi /etc/hosts
+确保包含你当前机器对应的 IP 和主机名，例如：
+192.168.79.10 master
+
+八、启动 Flink 集群
+先确保当前用户是 dsj_admin：whoami
+1. 启动 JobManager 和 TaskManager
+执行：$FLINK_HOME/bin/start-cluster.sh
+正常情况下，脚本会读取：
+- masters：启动 JobManager
+- workers：启动 TaskManager
+本次虽然只有一个 master，但会启动两个不同的 Flink 进程。
+
+2. 查看 Java 进程
+jps
+
+预期能看到类似：
+StandaloneSessionClusterEntrypoint
+TaskManagerRunner
+另外还有你已经安装的 Hadoop、HBase、Kafka、ZooKeeper 等进程。
+
+Flink 这两个进程的作用：
+Java进程				对应组件		作用
+StandaloneSessionClusterEntrypoint	JobManager	管理集群和作业
+TaskManagerRunner		TaskManager	执行实际计算任务
+
+3. 查看 Flink 日志
+ls -lh /data/flink/log
+查看 JobManager 日志：tail -f /data/flink/log/*jobmanager*.log
+查看 TaskManager 日志：tail -f /data/flink/log/*taskmanager*.log
+如果日志文件名称不一样，可以先执行：ls /data/flink/log
+再根据实际文件名称查看。
+
+九、访问 Flink Web 管理界面
+Flink 启动成功后，可以通过浏览器访问Flink Web UI：
+http://master:8081
+查看集群状态、TaskManager、作业和运行指标
+如果 Windows 电脑无法解析 Linux 的 master 主机名，可以直接使用 Linux 的 IP：
+http://192.168.79.10:8081
+进入页面后，重点观察以下内容：
+页面信息		说明
+Overview		Flink集群整体状态
+TaskManagers	TaskManager运行状态
+Running Jobs	正在运行的作业
+Completed Jobs	已完成作业
+Task Slots	计算槽位数量
+Available Task Slots	当前可用槽位
+
+十、验证 Flink 集群运行状态
+1. 检查 JobManager
+jps | grep StandaloneSessionClusterEntrypoint
+如果能查到进程，说明 JobManager 已启动。
+
+2. 检查 TaskManager
+jps | grep TaskManagerRunner
+如果能查到进程，说明 TaskManager 已启动。
+
+3. 检查 Web UI 接口
+curl -I http://master:8081
+正常情况下会返回 HTTP 响应，说明 Web 服务端口已正常监听。
+
+4. 检查监听端口
+ss -lntp | grep -E '8081|6123'
+
+常见端口：
+端口	用途
+8081	Flink Web UI / REST接口
+6123	JobManager RPC通信
+
+十一、配置防火墙（按需）
+如果 Rocky Linux 开启了 firewalld，需要放行 Flink Web UI 端口。放行 8081 TCP
+firewall-cmd --permanent --add-port=8081/tcp
+firewall-cmd --reload
+检查：firewall-cmd --list-ports
+如果当前实验环境防火墙已经关闭，这一步可以跳过。
+
+十二、停止 Flink 集群
+停止 JobManager 和 TaskManager：$FLINK_HOME/bin/stop-cluster.sh
+检查进程：jps
+确认 Flink 相关进程已退出。
+
+十三、本课最终目录结构
+本课完成后，Flink 环境结构如下：
+/usr/local/bigdata/
+└── flink/
+    ├── bin/
+    │   ├── flink
+    │   ├── start-cluster.sh
+    │   └── stop-cluster.sh
+    ├── conf/
+    │   ├── config.yaml
+    │   ├── flink-env.sh
+    │   ├── masters
+    │   └── workers
+    ├── lib/
+    └── plugins/
+
+/data/
+└── flink/
+    ├── log/
+    ├── checkpoints/
+    ├── savepoints/
+    └── tmp/
+
+
+本课学习总结
+本课完成了 Flink 实时计算环境的部署，理解了 Flink 的基本运行架构。
+知识点		本课掌握内容
+JobManager	Flink任务管理与调度中心
+TaskManager	执行实际数据计算
+Task Slots	TaskManager计算资源槽位
+Standalone	Flink独立集群运行模式
+Checkpoint	自动保存任务状态，支持故障恢复
+Savepoint	手动保存任务状态
+Web UI		查看集群和作业状态
+Flink日志		查看JobManager、TaskManager运行日志
+
+你的 A 方案现在已经部署到 Flink 实时计算组件。下一步第14课就不再是安装环境，而是进入 Flink 开发阶段，学习 DataStream、数据流处理、Window 窗口、Checkpoint，真正让 Flink 从运行环境变成实时计算工具。
+
+
+
+下面是创建Flink开机启动的步骤：
+一、创建 Flink systemd 服务
+使用 root 用户操作：vi /etc/systemd/system/flink.service
+写入以下完整内容：
+[Unit]
+Description=Apache Flink Standalone Cluster
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+User=dsj_admin
+Group=dsj_admin
+
+Environment=FLINK_HOME=/usr/local/bigdata/flink
+Environment=FLINK_LOG_DIR=/data/flink/log
+Environment=PATH=/usr/local/bigdata/flink/bin:/usr/local/bin:/usr/bin:/bin
+
+WorkingDirectory=/usr/local/bigdata/flink
+
+ExecStart=/usr/local/bigdata/flink/bin/start-cluster.sh
+ExecStop=/usr/local/bigdata/flink/bin/stop-cluster.sh
+
+TimeoutStartSec=180
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target
+
+这个服务使用 dsj_admin 用户启动 Flink，不会使用 root 运行 Flink 进程。
+
+二、重新加载 systemd 配置
+创建服务文件后执行：systemctl daemon-reload
+三、设置 Flink 开机自启动
+执行：systemctl enable flink
+成功后，Flink 将会在 Linux 系统开机进入正常启动阶段时自动启动。
+
+查看是否设置成功：systemctl is-enabled flink
+预期输出：enabled
+
+
+四、手动启动 Flink 服务
+以后不用再手动执行 start-cluster.sh，可以直接使用 systemd。
+启动：systemctl start flink
+查看状态：systemctl status flink
+正常情况下会显示：
+Active: active (exited)
+
+这里显示 active (exited) 对 Type=oneshot 服务是正常的，表示启动脚本执行完毕且服务被 systemd 标记为已启动；它不代表 Flink Java 进程退出了。还需要检查实际的 Flink 进程。
+
+五、验证 Flink 是否启动成功
+1. 查看 Java 进程
+jps
+检查是否有：
+StandaloneSessionClusterEntrypoint
+TaskManagerRunner
+
+2. 查看 Web UI
+浏览器打开：http://192.168.79.10:8081
+如果 IP 不同，请使用你 master 当前实际 IP。
+
+3. 查看端口
+ss -lntp | grep 8081
+
+六、Flink 服务管理命令（建议加入你的命令库）
+命令			说明
+systemctl start flink		启动Flink
+systemctl stop flink		停止Flink
+systemctl restart flink	重启Flink
+systemctl status flink	查看Flink服务状态
+systemctl enable flink	设置开机自启动
+systemctl disable flink	取消开机自启动
+systemctl is-enabled flink	查看是否已设置开机自启动
+systemctl is-active flink	查看服务是否处于活动状态
+journalctl -u flink -n 100	查看Flink服务启动日志
+journalctl -u flink -f		实时查看服务日志
+
+
+特别注意： Flink 的 start-cluster.sh 在 Standalone 模式下通常会通过 SSH 启动各节点进程。如果启动脚本需要 SSH，请确保 dsj_admin 已配置免密 SSH，特别是启动本机 master 时也能免密连接，否则开机时可能卡住或启动失败。
+
+这样你就可以把 Flink 也纳入之前 Hadoop、Hive、ZooKeeper、HBase、Kafka 的开机启动管理体系了。

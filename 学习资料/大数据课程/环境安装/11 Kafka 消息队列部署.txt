@@ -1,0 +1,867 @@
+一、部署架构
+项目		配置
+操作系统		Rocky Linux 9.8
+主机名		master
+IP 地址		192.168.79.10
+部署模式		单机伪分布式
+Kafka		4.4.x
+JDK		17
+运行用户		dsj_admin
+运行用户组	dsj_admin
+Kafka 模式	KRaft
+Broker 数量	1
+
+注意：Kafka 4.x 已经不再支持 ZooKeeper 模式，使用 KRaft 管理集群元数据。因此本课不需要再部署 ZooKeeper 来支持 Kafka。
+
+1.2 统一软件安装目录
+沿用你确定的目录规范：
+/usr/local/bigdata
+│
+├── jdk-17/
+├── python3.11/
+│
+├── hadoop/
+├── hive/
+├── spark/
+├── hbase/
+├── kafka/
+├── flink/
+├── zookeeper/
+│
+└── mysql/
+
+Kafka 目录规划：
+/usr/local/bigdata/kafka/
+├── bin/
+├── config/
+├── libs/
+├── licenses/
+├── NOTICE
+└── ...
+
+数据目录独立存放：
+/data/kafka/
+├── kraft-combined-logs/    # Kafka消息及KRaft元数据
+└── ...
+
+运行日志目录：
+/data/kafka/logs/
+
+1.3 用户权限规划
+Kafka 的所有文件和运行进程均归属于：
+User=dsj_admin
+Group=dsj_admin
+
+目录权限：
+/usr/local/bigdata/kafka  dsj_admin:dsj_admin
+/data/kafka               dsj_admin:dsj_admin
+
+这里要区分两件事：
+- root：负责安装软件、创建目录、配置 systemd 服务。
+- dsj_admin：负责启动、停止 Kafka，以及实际运行 Kafka Java 进程。
+以后 Hadoop、Hive、Spark、HBase、Kafka 等大数据组件都遵循这个原则。
+1.4 Kafka 4.4.0 版本选择
+截至 2026-11-17，Apache Kafka 官方已经发布 4.4.0，发布日期为 2026-10-22。本课使用正式版：
+- 软件包：kafka_2.13-4.4.0.tgz
+- Java：JDK 17+
+- Scala：2.13（软件包名称中的 2.13 是 Scala 版本，不是 Kafka 版本）
+
+
+二、理解 Kafka 的工作原理
+2.1 Kafka 是什么？
+Kafka 是一个分布式消息队列系统，主要用于不同程序之间传递消息。
+举个例子：
+假设你有一个 Java 电商程序：
+- 用户下单后，产生订单消息。
+- Kafka 接收订单消息。
+- 订单处理程序从 Kafka 获取订单消息。
+- 库存程序也可以读取订单消息。
+- 统计程序也可以读取订单消息。
+这样，生产者不需要直接调用每一个消费者。
+
+2.2 Kafka 核心组件
+组件		作用
+Broker		Kafka 消息服务器
+Topic		消息主题，类似消息分类
+Partition		Topic 的分区，用于并行处理和扩展
+Producer		消息生产者，负责发送消息
+Consumer	消息消费者，负责读取消息
+Consumer Group	消费者组，实现协同消费
+Offset		消息在分区中的偏移量
+KRaft		管理 Kafka 集群元数据和控制器选举
+
+2.3 Kafka 消息处理流程
+Producer 消息生产者
+Windows Java 程序 / Linux 程序
+	↓
+发送消息到 192.168.79.10:9092
+Kafka Broker（master）
+	Topic：order-topic
+Partition 0		Partition 1
+消息日志			消息日志	
+	消息按照分区存储，分区内部有序
+	↓
+Consumer A		Consumer B		
+订单处理			订单统计
+
+这里有一个重要知识点：
+同一个 Consumer Group 内的多个消费者会协同消费分区，一个分区同一时刻只会分配给组内一个消费者。
+不同 Consumer Group 则可以各自读取同一份消息。
+
+2.4 Kafka 与 ZooKeeper 的关系
+以前 Kafka 依赖 ZooKeeper 管理集群元数据、Broker 注册和控制器选举。
+
+现在 Kafka 4.x 使用 KRaft：
+旧架构	新架构
+Kafka + ZooKeeper	Kafka + KRaft
+ZooKeeper 管理元数据	Kafka 内部控制器管理元数据
+需要独立部署 ZooKeeper	不需要 ZooKeeper
+ZooKeeper 负责控制器选举协调	KRaft 负责控制器选举
+
+本课采用单机 Combined 模式：
+- Broker：负责接收、存储和发送消息。
+- Controller：负责集群元数据管理。
+- 两种角色运行在同一个 Kafka 进程中。
+注意：这是学习用单节点配置，不代表生产环境的高可用部署。
+
+三、Linux 安装 Kafka
+3.1 检查 Java 环境
+切换到 dsj_admin：
+su - dsj_admin
+检查：
+java -version
+echo $JAVA_HOME
+确保 Java 版本为 17。
+预期：
+openjdk version "17..."
+
+如果你之前配置的 /etc/profile.d/bigdata.sh 已经设置了 JAVA_HOME，这里不需要重复安装 JDK。
+3.2 下载 Kafka
+切换回 root：exit
+进入软件目录：cd /usr/local/bigdata
+下载：wget https://downloads.apache.org/kafka/4.4.0/kafka_2.13-4.4.0.tgz
+解压：tar -zxvf kafka_2.13-4.4.0.tgz
+移动到统一目录：mv kafka_2.13-4.4.0 kafka
+设置目录权限：chown -R dsj_admin:dsj_admin /usr/local/bigdata/kafka
+检查：ls -ld /usr/local/bigdata/kafka
+
+3.3 创建 Kafka 数据目录
+Kafka 数据不能放在软件安装目录里面。
+创建目录：
+mkdir -p /data/kafka/kraft-combined-logs
+mkdir -p /data/kafka/logs
+
+授权：chown -R dsj_admin:dsj_admin /data/kafka
+检查：ls -ld /data/kafka
+预期：
+dsj_admin dsj_admin
+
+3.4 配置环境变量
+编辑：vi /etc/profile.d/bigdata.sh
+在原有配置后面追加：
+# ==========================================
+# Kafka 4.4.0
+# ==========================================
+export KAFKA_HOME=/usr/local/bigdata/kafka
+export PATH=$PATH:$KAFKA_HOME/bin
+
+不要覆盖之前 Hadoop、Hive、Spark 等环境变量。
+使配置生效：source /etc/profile.d/bigdata.sh
+检查：echo $KAFKA_HOME
+输出：/usr/local/bigdata/kafka
+
+注意：/etc/profile.d 主要供登录 Shell 加载。systemd 服务不会自动加载这个文件，因此后面会在服务文件中单独指定 Java 环境。
+
+四、配置 Kafka KRaft 模式
+4.1 修改 server.properties
+切换到 dsj_admin：su - dsj_admin
+进入配置目录：cd $KAFKA_HOME/config
+备份原始配置：cp server.properties server.properties.bak
+编辑：vi server.properties
+将原有配置替换为下面这套单节点配置【】：
+
+# ==========================================
+# Kafka 4.4.0 KRaft 单机伪分布式配置
+# ==========================================
+
+# 1. Broker 和 Controller 角色
+process.roles=broker,controller
+
+# 2. 当前节点编号
+node.id=1
+
+# 3 KRaft 动态仲裁引导地址
+controller.quorum.bootstrap.servers=master:9093
+
+# 4. 监听地址
+listeners=PLAINTEXT://master:9092,CONTROLLER://master:9093
+
+# 5. 对外公布的客户端访问地址
+advertised.listeners=PLAINTEXT://192.168.79.10:9092
+
+# 6. Broker 通信协议
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+
+# 7. Broker 之间使用的监听器
+inter.broker.listener.name=PLAINTEXT
+
+# 8. Controller 使用的监听器
+controller.listener.names=CONTROLLER
+
+# 9. 消息和元数据存储目录
+log.dirs=/data/kafka/kraft-combined-logs
+
+# 10. 内部 Topic 副本数
+offsets.topic.replication.factor=1
+
+transaction.state.log.replication.factor=1
+transaction.state.log.min.isr=1
+
+# 11. 单节点学习环境参数
+group.initial.rebalance.delay.ms=0
+
+
+几个重要配置解释：
+配置		作用
+process.roles	当前进程同时担任 Broker 和 Controller
+node.id		当前 Kafka 节点编号
+controller	.quorum.voters	KRaft 控制器成员
+listeners		Kafka 实际监听的网络地址
+advertised.listeners	告诉客户端应该连接哪个地址
+log.dirs		消息数据和 KRaft 元数据存储位置
+replication.factor	消息副本数量
+
+这里最重要的是：
+listeners=PLAINTEXT://master:9092,CONTROLLER://master:9093
+advertised.listeners=PLAINTEXT://192.168.79.10:9092
+
+为什么要配置两个地址？
+- 9092：供 Windows、Linux 客户端连接 Kafka。
+- 9093：供 KRaft Controller 内部通信。
+- advertised.listeners：Kafka 返回给客户端的实际连接地址。
+特别注意：不能将 advertised.listeners 配置成 localhost:9092，否则 Windows 客户端可能连接失败。
+
+4.2 检查主机名解析
+确保：hostname
+返回：master
+检查：getent hosts master
+确保能够解析到：192.168.79.10
+如果没有配置，root 执行：vi /etc/hosts
+添加：192.168.79.10 master
+
+4.3 初始化 KRaft 存储目录
+Kafka 第一次启动之前，必须初始化存储目录。
+切换到 dsj_admin：su - dsj_admin
+生成 Cluster ID：kafka-storage.sh random-uuid
+得到类似：MkU3OEVBNTcwNTJENDM2Qk
+注意：每次执行可能得到不同的 UUID。
+
+初始化：
+kafka-storage.sh format \
+-t MkU3OEVBNTcwNTJENDM2Qk \
+--standalone \
+-c $KAFKA_HOME/config/server.properties
+
+这里把示例 UUID 换成你自己生成的 UUID。
+这个操作会在 Kafka 数据目录初始化 KRaft 元数据。
+重要：只初始化一次，不要每次启动 Kafka 都执行 format。 已有数据时不要随意重新格式化，否则可能破坏现有集群元数据和消息数据。
+
+五、启动 Kafka 并测试
+5.1 先手动启动测试
+先不要急着配置开机启动，先手动运行一次。
+使用 dsj_admin：su - dsj_admin
+启动：
+kafka-server-start.sh -daemon \
+$KAFKA_HOME/config/server.properties
+
+检查进程：jps
+正常情况下可以看到：Kafka
+检查端口：ss -lntp | grep -E '9092|9093'
+预期：
+9092
+9093
+
+检查 Kafka 日志：
+tail -f $KAFKA_HOME/logs/server.log
+
+如果当前发行包的日志配置没有生成这个文件，可以root身份使用：journalctl -u kafka -f
+或者查看 Kafka 实际日志输出位置。
+
+5.2 创建 Topic
+Kafka 启动成功后，创建一个订单主题：
+kafka-topics.sh \
+--bootstrap-server master:9092 \
+--create \
+--topic order-topic \
+--partitions 2 \
+--replication-factor 1
+
+参数说明：
+参数		说明
+--bootstrap-server	Kafka 连接地址
+--create		创建 Topic
+--topic		Topic 名称
+--partitions	分区数量
+--replication-factor	副本数量
+
+这里创建了：
+Topic：order-topic
+Partition：2
+Replication：1
+
+为什么副本数量设置为 1？
+因为目前只有一台 Broker，没有其他 Broker 可以存放副本。
+
+5.3 查看 Topic
+查看所有 Topic：kafka-topics.sh --bootstrap-server master:9092 --list
+
+查看指定 Topic：
+kafka-topics.sh \
+--bootstrap-server master:9092 \
+--describe \
+--topic order-topic
+
+预期能够看到：
+Topic: order-topic
+PartitionCount: 2
+ReplicationFactor: 1
+
+5.4 Linux 消息生产者测试
+打开一个终端：
+kafka-console-producer.sh \
+--bootstrap-server master:9092 \
+--topic order-topic
+
+输入消息：
+orderId=1001,user=test,amount=99.9
+orderId=1002,user=test,amount=199.9
+orderId=1003,user=test,amount=299.9
+
+输入的每一行就是一条 Kafka 消息。
+
+5.5 Linux 消息消费者测试
+再打开一个 SSH 终端：
+kafka-console-consumer.sh \
+--bootstrap-server master:9092 \
+--topic order-topic \
+--from-beginning
+
+消费者应该可以看到：
+orderId=1001,user=test,amount=99.9
+orderId=1002,user=test,amount=199.9
+orderId=1003,user=test,amount=299.9
+
+这里：
+- --from-beginning：从当前消费者可读取的最早消息开始读取。
+- 不指定该参数时，默认从消费者建立时的最新位置开始读取（新消费组情况下）。
+可以继续在生产者终端输入消息，消费者会实时接收。
+按 Ctrl+C 退出。
+
+5.6 理解消费者组
+再测试消费者组：
+终端 A：
+kafka-console-consumer.sh \
+--bootstrap-server master:9092 \
+--topic order-topic \
+--group order-group
+
+终端 B：
+kafka-console-consumer.sh \
+--bootstrap-server master:9092 \
+--topic order-topic \
+--group order-group
+
+两个消费者属于同一个消费组。
+因为有两个 Partition，Kafka 可以将两个分区分配给两个消费者。
+
+查看消费者组：
+kafka-consumer-groups.sh \
+--bootstrap-server master:9092 \
+--list
+
+查看消费组详情：
+kafka-consumer-groups.sh \
+--bootstrap-server master:9092 \
+--describe \
+--group order-group
+
+这里可以观察：
+- 当前消费者组。
+- 分区分配情况。
+- 当前消费 Offset。
+- 日志末尾 Offset。
+- 消息积压量 Lag。
+这也是以后排查 Kafka 消息堆积的重要手段。
+
+六、配置 Kafka 开机自动启动
+前面的手动测试通过后，再配置 systemd。
+6.1 创建服务文件
+切换到 root：exit
+创建：vi /etc/systemd/system/kafka.service
+写入：
+[Unit]
+Description=Apache Kafka 4.4.0
+After=network.target
+
+[Service]
+Type=simple
+
+User=dsj_admin
+Group=dsj_admin
+
+Environment="JAVA_HOME=/usr/local/bigdata/jdk"
+Environment="KAFKA_HOME=/usr/local/bigdata/kafka"
+
+WorkingDirectory=/usr/local/bigdata/kafka
+
+ExecStart=/usr/local/bigdata/kafka/bin/kafka-server-start.sh /usr/local/bigdata/kafka/config/server.properties
+
+ExecStop=/usr/local/bigdata/kafka/bin/kafka-server-stop.sh
+
+Restart=on-failure
+RestartSec=10
+
+LimitNOFILE=100000
+
+[Install]
+WantedBy=multi-user.target
+
+
+6.2 加载服务
+systemctl daemon-reload
+
+设置开机启动：systemctl enable kafka
+启动：systemctl start kafka
+查看状态：systemctl status kafka
+预期：
+Active: active (running)
+
+
+6.3 常用管理命令
+操作		命令
+启动		systemctl start kafka
+停止		systemctl stop kafka
+重启		systemctl restart kafka
+状态		systemctl status kafka
+开机启动		systemctl enable kafka
+取消开机启动	systemctl disable kafka
+查看日志		journalctl -u kafka -f
+
+6.4 检查运行用户
+执行：ps -eo user,group,pid,cmd | grep '[k]afka.Kafka'
+应该看到 Kafka Java 进程归属于：dsj_admin dsj_admin
+这就符合你的统一运行规范了。
+
+6.5 网络端口
+Windows 要访问 Linux Kafka，需要确保 Linux 的 9092 端口可以访问。
+如果 Rocky Linux 启用了 firewalld：
+firewall-cmd --permanent --add-port=9092/tcp
+firewall-cmd --reload
+
+9093 是本机 KRaft Controller 通信端口，本课单节点不需要向 Windows 开放。
+Windows 测试：Test-NetConnection 192.168.79.10 -Port 9092
+预期：TcpTestSucceeded : True
+
+七、Windows Java 程序连接 Linux Kafka
+本课重点实战
+前面我们已经通过 Linux 命令行完成了消息生产和消费。
+现在做一个真正的开发案例：Windows 上运行 Java 程序，连接 Linux 上的 Kafka Broker。
+
+7.1 整体架构
+Windows 11 开发环境
+KafkaProducer.java生产者
+KafkaConsumer.java消费者
+JDK 17 + Maven + kafka-clients
+	↑↓
+TCP 9092 / Kafka 协议
+Linux master：192.168.79.10
+Kafka 4.4.0
+Topic：order-topic
+Partition 0 / Partition 1
+运行用户：dsj_admin
+
+
+7.2 Windows 创建 Maven 项目
+在 Windows 上创建项目：
+KafkaWindowsDemo
+│
+├── pom.xml
+│
+└── src
+    └── main
+        └── java
+            └── com
+                └── example
+                    └── kafka
+                        ├── KafkaProducerDemo.java
+                        └── KafkaConsumerDemo.java
+
+这里不需要在 Windows 安装 Kafka Server，只需要 Kafka Java 客户端依赖。
+
+7.3 配置 pom.xml
+使用 Kafka 4.4.0 客户端：
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>KafkaWindowsDemo</artifactId>
+    <version>1.0.0</version>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Kafka Java 客户端 -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>4.4.0</version>
+        </dependency>
+    </dependencies>
+
+</project>
+
+7.4 编写生产者 KafkaProducerDemo.java
+这个程序负责向 Linux Kafka 发送订单消息。
+
+package com.example.kafka;
+
+import org.apache.kafka.clients.producer.*;
+import org.apache.kafka.common.serialization.StringSerializer;
+
+import java.util.Properties;
+
+public class KafkaProducerDemo {
+
+    public static void main(String[] args) {
+
+        // Kafka 连接配置
+        Properties props = new Properties();
+
+        // Linux Kafka 地址
+        props.put(
+            ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,
+            "192.168.79.10:9092"
+        );
+
+        // Key 和 Value 序列化方式
+        props.put(
+            ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+            StringSerializer.class.getName()
+        );
+
+        props.put(
+            ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+            StringSerializer.class.getName()
+        );
+
+        // 创建生产者
+        try (KafkaProducer<String, String> producer =
+                 new KafkaProducer<>(props)) {
+
+            // 模拟发送10条订单消息
+            for (int i = 1; i <= 10; i++) {
+
+                String orderId = "ORDER" + i;
+
+                String message =
+                    "orderId=" + orderId +
+                    ",user=test,amount=" + (i * 99.9);
+
+                ProducerRecord<String, String> record =
+                    new ProducerRecord<>(
+                        "order-topic",
+                        orderId,
+                        message
+                    );
+
+                // 发送消息并等待发送结果
+                RecordMetadata metadata =
+                    producer.send(record).get();
+
+                System.out.println(
+                    "发送成功：" + message +
+                    " | Partition=" + metadata.partition() +
+                    " | Offset=" + metadata.offset()
+                );
+            }
+
+            producer.flush();
+
+            System.out.println("全部订单消息发送完成！");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+这里有几个重点：
+props.put(
+    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,
+    "192.168.79.10:9092"
+);
+
+这是连接 Linux Kafka 的地址。
+new ProducerRecord<>(
+    "order-topic",
+    orderId,
+    message
+);
+
+
+三个参数分别代表：
+1. Topic 名称。
+2. 消息 Key。
+3. 消息 Value。
+Kafka 会根据 Key 进行分区选择；在默认分区器下，相同 Key 通常进入同一个分区。
+
+7.5 编写消费者 KafkaConsumerDemo.java
+这个程序负责接收 Linux Kafka 中的订单消息。
+
+package com.example.kafka;
+
+import org.apache.kafka.clients.consumer.*;
+import org.apache.kafka.common.serialization.StringDeserializer;
+
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Properties;
+
+public class KafkaConsumerDemo {
+
+    public static void main(String[] args) {
+
+        Properties props = new Properties();
+
+        // Linux Kafka 地址
+        props.put(
+            ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
+            "192.168.79.10:9092"
+        );
+
+        // 消费者组
+        props.put(
+            ConsumerConfig.GROUP_ID_CONFIG,
+            "windows-order-group"
+        );
+
+        // Key 反序列化
+        props.put(
+            ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+            StringDeserializer.class.getName()
+        );
+
+        // Value 反序列化
+        props.put(
+            ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+            StringDeserializer.class.getName()
+        );
+
+        // 新消费组从最早消息开始消费
+        props.put(
+            ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+            "earliest"
+        );
+
+        // 自动提交 Offset
+        props.put(
+            ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,
+            "true"
+        );
+
+        try (KafkaConsumer<String, String> consumer =
+                 new KafkaConsumer<>(props)) {
+
+            // 订阅 Topic
+            consumer.subscribe(
+                Collections.singletonList("order-topic")
+            );
+
+            System.out.println("消费者启动，等待订单消息...");
+
+            while (true) {
+
+                ConsumerRecords<String, String> records =
+                    consumer.poll(Duration.ofMillis(1000));
+
+                for (ConsumerRecord<String, String> record : records) {
+
+                    System.out.println(
+                        "收到消息：" + record.value()
+                    );
+
+                    System.out.println(
+                        "Partition：" + record.partition()
+                    );
+
+                    System.out.println(
+                        "Offset：" + record.offset()
+                    );
+
+                    System.out.println("--------------------------");
+                }
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+
+消费者关键代码：
+consumer.subscribe(
+    Collections.singletonList("order-topic")
+);
+表示订阅订单主题。
+
+consumer.poll(Duration.ofMillis(1000));
+表示每次最多等待 1000 毫秒获取消息。
+
+props.put(
+    ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+    "earliest"
+);
+表示当消费组没有已提交的 Offset 时，从最早可读取的消息开始消费。
+
+注意：earliest 不会让已经提交过 Offset 的消费组每次都从头读取。需要重新从头测试时，可以使用新的消费组名称，或者重置已有消费组 Offset。
+
+7.6 Windows 运行测试
+使用 IDEA 打开项目，等待 Maven 下载依赖。
+先启动消费者：
+运行：
+KafkaConsumerDemo.main()
+
+控制台：
+消费者启动，等待订单消息...
+
+然后运行生产者：
+KafkaProducerDemo.main()
+
+生产者输出类似：
+发送成功：orderId=ORDER1,user=test,amount=99.9 | Partition=...
+发送成功：orderId=ORDER2,user=test,amount=199.8 | Partition=...
+发送成功：orderId=ORDER3,user=test,amount=299.70000000000005 | Partition=...
+...
+全部订单消息发送完成！
+
+消费者输出：
+消费者启动，等待订单消息...
+
+收到消息：orderId=ORDER1,user=test,amount=99.9
+Partition：0
+Offset：0
+--------------------------
+
+收到消息：orderId=ORDER2,user=test,amount=199.8
+Partition：1
+Offset：0
+--------------------------
+
+实际 Partition 和 Offset 由 Kafka 分配，不保证与示例一致。
+
+测试成功
+ Windows Java 程序已经通过网络连接 Linux Kafka，并实现消息生产和消费。
+
+7.7 Windows 测试失败时检查
+如果出现连接超时，依次检查：
+第一步：Windows 测试端口
+Test-NetConnection 192.168.79.10 -Port 9092
+
+第二步：Linux 检查监听地址
+ss -lntp | grep 9092
+
+第三步：检查 advertised.listeners
+advertised.listeners=PLAINTEXT://192.168.79.10:9092
+不能填写 localhost。
+
+第四步：检查 Kafka 服务
+systemctl status kafka
+
+第五步：检查日志
+journalctl -u kafka -n 100 --no-pager
+
+还要注意：Windows 和 Linux 必须处于能够互相访问的网络中。
+
+八、验证 Kafka 完整部署
+最后在 Linux 执行：
+systemctl status kafka
+jps
+ss -lntp | grep -E '9092|9093'
+
+查看 Topic：
+kafka-topics.sh \
+--bootstrap-server master:9092 \
+--list
+
+查看消费者组：
+kafka-consumer-groups.sh \
+--bootstrap-server master:9092 \
+--list
+
+检查数据目录：
+du -sh /data/kafka/kraft-combined-logs
+
+检查服务运行账号：
+ps -eo user,group,pid,cmd | grep '[k]afka.Kafka'
+
+确认最终结果：
+检查项目		预期结果
+Kafka 服务	active (running)
+Java 进程		Kafka
+运行用户		dsj_admin
+运行用户组	dsj_admin
+Broker 端口	9092
+Controller 端口	9093
+Topic		order-topic
+Partition		2
+Windows Java 生产者	可以发送消息
+Windows Java 消费者	可以接收消息
+开机启动		enabled
+
+
+九、特别注意：Kafka 4.4.x 的 KRaft 动态仲裁配置
+这里补充一个 Kafka 4.4.x 的版本细节，避免你直接照抄旧版教程。
+Kafka 4.4 官方已经提供动态 KRaft Quorum 配置方式。对于本课这种新建单节点环境，我建议采用动态仲裁方式，而不是旧式静态 controller.quorum.voters。
+
+因此，前面第四节的配置文件中：
+原来的：controller.quorum.voters=1@master:9093
+应该替换为：controller.quorum.bootstrap.servers=master:9093
+其他配置保持不变。
+
+初始化命令继续使用：
+kafka-storage.sh format \
+-t 你的Cluster-ID \
+--standalone \
+-c $KAFKA_HOME/config/server.properties
+
+这两项需要配套使用：
+- controller.quorum.bootstrap.servers：动态仲裁模式。
+- --standalone：初始化单节点动态仲裁。
+这是 Kafka 4.4 官方文档推荐的配置方向。
+
+如果你已经使用旧配置初始化了数据目录，不要直接修改配置后再次执行 format；应先确认是否有需要保留的数据，再决定是否重新初始化。
+
+十、本课知识总结
+本课完成了 Kafka 的部署与 Windows Java 客户端开发。
+序号	学习内容		掌握目标
+1	Kafka 基本架构	Broker、Topic
+2	KRaft		不依赖 ZooKeeper
+3	Partition		分区与消息存储
+4	Producer		生产消息
+5	Consumer	消费消息
+6	Consumer Group	消费者组
+7	Offset		消息消费位置
+8	Java API		Windows 连接 Linux
+9	systemd		Kafka 开机启动
+
+
