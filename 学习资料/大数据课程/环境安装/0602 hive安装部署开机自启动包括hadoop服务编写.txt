@@ -573,3 +573,74 @@ Hive Metastore
 HiveServer2
 
 停止时建议按照相反顺序。
+
+
+十一  windows开发hive SQL程序连接hive-server2执行：
+创建一个maven项目，pom.xml如下：
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.example</groupId>
+    <artifactId>hiveTest</artifactId>
+    <version>1.0-SNAPSHOT</version>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.hive</groupId>
+            <artifactId>hive-jdbc</artifactId>
+            <version>3.1.3</version>
+        </dependency>
+    </dependencies>
+</project>
+
+然后创建一个java的jdbc测试程序,启动运行后可以在http://192.168.79.10:10002/看日志：
+package org.example;
+
+import java.sql.*;
+
+public class HiveJdbcDemo {
+
+    public static void main(String[] args) throws Exception {
+
+        String url =
+                "jdbc:hive2://192.168.79.10:10000/default";
+
+        Connection conn = DriverManager.getConnection(
+                url, "dsj_admin", ""
+        );
+
+        Statement stmt = conn.createStatement();
+
+        ResultSet rs = stmt.executeQuery(
+                "SELECT * FROM test_dw.student"
+        );
+
+        System.out.println("缁撴灉濡備笅锛?);
+        while (rs.next()) {
+            System.out.println(
+                    rs.getInt("id") + " " +
+                            rs.getString("name") + " " +
+                            rs.getInt("age")
+            );
+        }
+
+        rs.close();
+        stmt.close();
+        conn.close();
+    }
+}
+
+
+
+
+
+

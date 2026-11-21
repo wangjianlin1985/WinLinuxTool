@@ -60,7 +60,7 @@ wget https://dlcdn.apache.org/hadoop/common/hadoop-3.5.0/hadoop-3.5.0.tar.gz
 sudo dnf install -y wget
 
 4. 解压
-tar -zxvf hadoop-3.5.0.tar.gz
+tar -zxf hadoop-3.5.0.tar.gz
 
 5. 统一目录名称
 ln -s hadoop-3.5.0 hadoop

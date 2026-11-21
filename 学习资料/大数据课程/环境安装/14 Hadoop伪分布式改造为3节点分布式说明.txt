@@ -1,0 +1,387 @@
+我仔细看了你上传的 Hadoop 3.5.0 原始配置教程。整体上，你之前的 A 方案配置已经为 B 方案做好了不少准备，不需要重新安装 Hadoop，也不需要重新格式化 NameNode。
+
+而且我发现一个好消息：你之前已经采用了我们需要的核心设计：
+- NameNode 地址：master:8020
+- 软件目录：/usr/local/bigdata/hadoop
+- 数据目录：/data/hadoop/
+- 运行用户：dsj_admin
+- Hadoop 版本：3.5.0
+- Master 已经是 DataNode
+- workers 目前只有 master
+这些都可以保留。
+
+我的建议是：在原有 A 方案配置上增量修改，升级为 B 方案，不改变目录规划和端口规划。
+
+下面我按照你的原始配置逐项说明。
+一、现有配置需要修改什么？
+可以保留
+配置项目	原来设置	B 方案处理
+Hadoop 版本	3.5.0	保留
+JAVA_HOME	/usr/local/bigdata/jdk	保留
+fs.defaultFS	hdfs://master:8020	保留
+NameNode 目录	/data/hadoop/namenode	保留
+DataNode 目录	/data/hadoop/datanode	保留
+Hadoop 临时目录	/data/hadoop/tmp	保留
+日志目录	/data/hadoop/logs	保留
+NameNode RPC	8020	保留
+NameNode Web	9870	保留
+SecondaryNameNode Web	9868	保留
+
+需要重点调整的有三个方面：
+1. 增加 SecondaryNameNode 独立检查点目录。
+2. 调整 HDFS 副本数量。
+3. 修改 workers 文件，加入 Worker1 和 Worker2。
+另外还需要补充 YARN 的配置，并根据实际文件检查是否已有相关参数。
+
+二、修改 hdfs-site.xml
+这是最重要的修改。你原来的配置中有两个需要注意的地方：
+
+1. 增加 SecondaryNameNode 检查点目录
+
+原来只有：
+<property>
+    <name>dfs.namenode.secondary.http-address</name>
+    <value>master:9868</value>
+</property>
+
+建议增加：
+<property>
+    <name>dfs.namenode.checkpoint.dir</name>
+    <value>file:///data/hadoop/secondary</value>
+</property>
+
+这样 SecondaryNameNode 就会在 Master 上使用独立目录保存检查点。
+
+2. 修改 DataNode 的固定监听地址
+
+你原来的配置：
+<property>
+    <name>dfs.datanode.address</name>
+    <value>master:9866</value>
+</property>
+
+<property>
+    <name>dfs.datanode.http.address</name>
+    <value>master:9864</value>
+</property>
+
+这两项建议直接删除。
+原因是以后 Worker1、Worker2 也会启动 DataNode。如果把监听地址固定为 master，Worker 上的 DataNode 就可能无法正确绑定自己的网络接口。
+Hadoop 默认会使用通配监听地址，适合这种多节点部署。
+
+3. 其他配置保留
+
+包括：
+- NameNode 元数据目录。
+- DataNode 数据目录。
+- NameNode RPC 地址。
+- NameNode Web 地址。
+- SecondaryNameNode Web 地址。
+你的原有目录规划完全可以继续使用。粘贴的文本 (1).txt
+
+建议修改后的 hdfs-site.xml
+以下是按你的原有目录和端口整理后的版本：
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+
+    <!-- NameNode 元数据目录 -->
+    <property>
+        <name>dfs.namenode.name.dir</name>
+        <value>file:///data/hadoop/namenode</value>
+    </property>
+
+    <!-- DataNode 数据块目录 -->
+    <property>
+        <name>dfs.datanode.data.dir</name>
+        <value>file:///data/hadoop/datanode</value>
+    </property>
+
+    <!-- 默认副本数量 -->
+    <property>
+        <name>dfs.replication</name>
+        <value>1</value>
+    </property>
+
+    <!-- NameNode RPC -->
+    <property>
+        <name>dfs.namenode.rpc-address</name>
+        <value>master:8020</value>
+    </property>
+
+    <!-- NameNode Web -->
+    <property>
+        <name>dfs.namenode.http-address</name>
+        <value>master:9870</value>
+    </property>
+
+    <!-- SecondaryNameNode Web -->
+    <property>
+        <name>dfs.namenode.secondary.http-address</name>
+        <value>master:9868</value>
+    </property>
+
+    <!-- SecondaryNameNode 检查点目录 -->
+    <property>
+        <name>dfs.namenode.checkpoint.dir</name>
+        <value>file:///data/hadoop/secondary</value>
+    </property>
+
+    <!-- 检查点时间间隔：1小时 -->
+    <property>
+        <name>dfs.namenode.checkpoint.period</name>
+        <value>3600</value>
+    </property>
+
+</configuration>
+
+
+这里我保留了你原来的副本数 1，方便你随时只启动 Master。
+
+等三节点集群运行后，可以通过下面的命令把指定目录的数据副本调整为 3：
+hdfs dfs -setrep -w 3 /bigdata/test
+
+
+这样不用为了切换运行模式而反复修改 Hadoop 配置。
+三、创建 SecondaryNameNode 数据目录【maser上面执行就行】
+使用 root 执行：
+mkdir -p /data/hadoop/secondary
+chown -R dsj_admin:dsj_admin /data/hadoop
+
+最终目录：
+/data/hadoop/
+├── namenode/
+├── datanode/
+├── secondary/
+├── logs/
+└── tmp/
+
+注意：不要删除原来的 namenode 和 datanode 目录，也不要重新格式化 NameNode。
+
+四、修改 workers 文件【注意回车换行符是linux的LF】
+这是 B 方案最关键的集群扩展配置。
+原来：
+master
+
+改为：
+master
+worker1
+worker
+
+以后启动 HDFS 时：
+- Master 启动 NameNode。
+- Master 启动 SecondaryNameNode。
+- Master 启动自己的 DataNode。
+- Worker1 启动 DataNode。
+- Worker2 启动 DataNode。
+
+我看完了你这份原来的 YARN 配置记录。结论是：
+需要修改的地方很少，原来的 YARN 配置基本可以保留。 你之前按照 6GB 内存的单机伪分布式环境设计的参数，在 B 方案中仍然适用。
+但有一个重要区别：现在我们要让 Master、Worker1、Worker2 都能运行 NodeManager，所以需要考虑三个节点的资源分配。
+
+我建议采用以下原则：
+- ResourceManager 固定运行在 Master。
+- NodeManager 在三个节点都运行。
+- ApplicationMaster 由 YARN 动态分配，不需要单独指定在哪台机器常驻。
+- Container 的内存配置采用每个节点独立计算，而不是把三台机器的内存合计填写到 Master 的配置里。
+
+一、yarn-site.xml 哪些参数需要修改？
+你原来的配置如下：
+参数					原配置		B 方案建议
+yarn.resourcemanager.hostname		master		保留
+yarn.nodemanager.aux-services		mapreduce_shuffle	保留
+yarn.nodemanager.resource.memory-mb	3072		视每台 VM 内存调整
+yarn.nodemanager.resource.cpu-vcores	2		视每台 VM CPU 调整
+yarn.scheduler.minimum-allocation-mb		512		保留
+yarn.scheduler.maximum-allocation-mb	3072		建议调整
+yarn.scheduler.minimum-allocation-vcores	1		保留
+yarn.scheduler.maximum-allocation-vcores	2		保留
+
+【再原来的单机伪分布式里面建议修改这2个参数就行】
+配置项	原来的值	建议修改为
+yarn.nodemanager.resource.memory-mb	3072	2048
+yarn.scheduler.maximum-allocation-mb	3072	2048
+
+其他配置不需要修改，以下参数保持原样：
+- yarn.resourcemanager.hostname：master
+- yarn.nodemanager.aux-services：mapreduce_shuffle
+- yarn.nodemanager.resource.cpu-vcores：2
+- yarn.scheduler.minimum-allocation-mb：512
+- yarn.scheduler.minimum-allocation-vcores：1
+- yarn.scheduler.maximum-allocation-vcores：2
+
+另外两个地方
+1. mapred-site.xml：AM、Map、Reduce 的 1024MB 内存配置，以及 -Xmx768m 暂时都不改。
+2. workers 文件：目前只有 Master 安装了 Hadoop，所以暂时保留 master。等 Worker1、Worker2 安装配置完成后，再增加它们。
+注意： 2048MB 是暂定的保守配置，最终还要结合三台虚拟机各自分配的内存确定。修改配置不需要重新格式化 NameNode。
+
+安装完成后，怎么判断三节点集群健康？
+这个非常重要。不能只看 Hadoop 进程启动了，就认为集群正常。
+
+我建议你做五组测试。
+1. 检查 HDFS 节点
+在 master 执行：hdfs dfsadmin -report
+
+正常情况下，应该看到：
+预期结果
+Live datanodes (3):
+Name: 192.168.79.11
+Hostname: work1
+Name: 192.168.79.12
+Hostname: work2
+Name: 192.168.79.10
+Hostname: master
+这代表三个工作节点都已经成功注册到 NameNode。
+
+还可以执行：hdfs fsck /    查看 HDFS 文件系统是否存在损坏的块。
+
+2. 检查 YARN 节点
+执行：yarn node -list -all
+预期：
+Total Nodes:3
+work1:8041    RUNNING
+work2:8041    RUNNING
+master:8042	RUNNING（我看到的怎么是8042？） 
+这表示两个 NodeManager 已经注册到 ResourceManager。
+
+3. 检查 Hadoop 进程
+master：jps
+预期主要看到：
+NameNode
+ResourceManager
+work1：jps
+预期：
+DataNode
+NodeManager
+work2：jps
+预期：
+DataNode
+NodeManager
+
+4. 测试 HDFS 真实分布式存储
+在 master 创建测试文件：echo "Hello Hadoop Cluster" > test.txt
+上传到 HDFS：
+hdfs dfs -mkdir -p /test
+hdfs dfs -put test.txt /test/
+
+查看文件：hdfs dfs -ls /test
+
+查看文件块信息：hdfs fsck /test/test.txt -files -blocks -locations
+
+这里可以看到文件块存储在哪些 DataNode 上。
+
+5. 测试 YARN 分布式计算
+运行 Hadoop 自带的 WordCount 示例：
+hadoop jar $HADOOP_HOME/share/hadoop/mapreduce/hadoop-mapreduce-examples-3.5.0.jar \
+wordcount /test /output
+
+查看结果：hdfs dfs -cat /output/part-r-00000
+
+如果能够成功运行，说明：
+- HDFS 文件上传正常。
+- DataNode 存储正常。
+- YARN 资源调度正常。
+- NodeManager 能够执行计算任务。
+- MapReduce 能够完成分布式计算。
+这才是比较完整的集群联调测试。
+
+Apache 官方也推荐通过 HDFS 报告、YARN 节点状态以及 MapReduce 示例任务来验证集群。
+
+五、最后还有两个 Web 页面可以检查
+集群启动后，在 Windows 浏览器访问：
+页面		地址			作用
+NameNode	http://192.168.79.10:9870	查看 HDFS 存储节点
+ResourceManager	http://192.168.79.10:8088	查看 YARN 计算节点和任务
+
+NameNode 页面
+应能看到三个 Live DataNodes。
+
+ResourceManager 页面
+应能看到三个 RUNNING 节点。
+
+六、我们接下来按照什么顺序操作？
+我建议不要一次性修改太多配置，按照下面的顺序来：
+1. 检查 master 当前 Hadoop 环境
+   确认 Hadoop 版本、安装目录、数据目录、配置文件和当前运行状态。
+2. 准备 work1、work2
+   检查 JDK 17、用户、目录、主机名解析和 SSH 免密。
+3. master 分发 Hadoop 
+   直接利用现有安装目录，不需要重新下载压缩包。
+4. 修改三节点 Hadoop 配置
+   配置 HDFS、YARN、workers 等参数。
+5. 启动三节点集群 
+   先启动 HDFS，再启动 YARN。
+6. 集群健康检查和综合测试
+   检查 DataNode、NodeManager，完成 HDFS 文件存储和 MapReduce 计算测试。
+
+
+【下面的端口放行不用做了，我们之间关闭防火墙算了，因为yarn通信采用了系统动态分配端口，开放端口太难搞了，直接关闭防火墙一了白了，下面的这些端口可以参考学习了解】
+关闭防火墙命令：systemctl disable --now firewalld
+验证防火墙状态： systemctl is-active firewalld
+
+一、Hadoop 3.5.0 需要放行的端口
+1. HDFS 端口
+组件			端口	用途					运行节点
+NameNode RPC		8020	HDFS 客户端、DataNode 与 NameNode 通信	Master
+NameNode Web		9870	HDFS Web 管理页面				Master
+SecondaryNameNode HTTP	9868	检查点 Web 页面				Master
+DataNode 数据传输		9866	HDFS 数据块传输				三台
+DataNode HTTP		9864	DataNode Web 页面			三台
+DataNode IPC		9867	DataNode 内部 IPC 通信			三台
+
+2. YARN 端口
+组件				端口	用途			运行节点
+ResourceManager Scheduler		8030	调度器通信		Master
+ResourceManager ResourceTracker	8031	NodeManager 注册和心跳	Master
+ResourceManager Client		8032	客户端提交任务		Master
+ResourceManager Admin		8033	管理接口			Master
+ResourceManager Web		8088	YARN Web 管理页面	Master
+NodeManager Localizer		8040	资源本地化		三台
+NodeManager Web		8042	NodeManager Web 页面	三台
+NodeManager Shuffle		13562	MapReduce Shuffle 服务	三台
+
+3. SSH 端口
+端口	用途	运行节点
+TCP 22	Master 远程启动 Worker	三台
+另外，ZooKeeper、JournalNode 目前如果还没有部署 HDFS HA，不需要为了当前普通 HDFS 三节点集群提前开放它们的端口。
+
+二、建议你的三台虚拟机统一放行
+为了方便学习，我建议三台机器统一放行 Hadoop 集群内部需要的 TCP 端口。推荐：三台统一配置
+在 Master、Worker1、Worker2 分别使用 root 执行：
+firewall-cmd --permanent --add-port=22/tcp
+firewall-cmd --permanent --add-port=8020/tcp
+firewall-cmd --permanent --add-port=9864-9868/tcp
+firewall-cmd --permanent --add-port=9870/tcp
+firewall-cmd --permanent --add-port=8030-8033/tcp
+firewall-cmd --permanent --add-port=8040-8042/tcp
+firewall-cmd --permanent --add-port=8088/tcp
+firewall-cmd --permanent --add-port=13562/tcp
+
+firewall-cmd --reload
+这里是方便实验环境使用的统一规则。实际生产环境应该根据节点角色和访问来源进一步收紧，不需要把所有管理页面开放给整个网络。
+
+三、其他大数据组件以后还需要的端口
+你后面还要学习 Hadoop、Hive、Spark、HBase、Kafka、Flink，这些端口也可以提前了解。
+组件			端口	用途
+HiveServer2		10000	Hive JDBC
+Spark ThriftServer		10001	Spark SQL JDBC
+Hive Metastore		9083	Metastore 服务
+HBase Master Web		16010	HBase 管理页面
+HBase Master RPC		16000	HBase Master
+HBase RegionServer	16020	RegionServer
+HBase RegionServer Web	16030	RegionServer 页面
+Kafka			9092	客户端通信
+Flink Web			8081	Flink 管理页面
+Flink JobManager RPC	6123	JobManager 通信
+ZooKeeper		2181	客户端连接
+ZooKeeper		2888	集群节点通信
+ZooKeeper		3888	Leader 选举
+
+这些是后续组件的常见默认端口，具体还要以你的实际配置为准。
+
+
+
+
+
+

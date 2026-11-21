@@ -65,6 +65,7 @@ Environment="HBASE_PID_DIR=/data/hbase/tmp/pids"
 
 ExecStart=/usr/local/bigdata/hbase/bin/start-hbase.sh
 ExecStop=/usr/local/bigdata/hbase/bin/stop-hbase.sh
+ExecStop=/usr/local/bigdata/hbase/bin/hbase-daemon.sh stop regionserver
 
 Restart=on-failure
 RestartSec=15

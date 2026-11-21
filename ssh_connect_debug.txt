@@ -1,0 +1,3 @@
+2026-11-20 21:38:05.249 After ConPTY.Start OK
+PIDHandle=2132
+OutHandle=2468

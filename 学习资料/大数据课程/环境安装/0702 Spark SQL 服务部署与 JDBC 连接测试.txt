@@ -266,11 +266,49 @@ public class SparkJdbcDemo {
     }
 }
 
-
 然后直接在idea运行看分析结果，超级方便！
 
+9 设置开机启动spark-thriftserver服务：
+执行：sudo vi /etc/systemd/system/spark-thriftserver.service 写入：
+
+[Unit]
+Description=Spark ThriftServer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=dsj_admin
+Group=dsj_admin
+
+Environment=SPARK_HOME=/usr/local/bigdata/spark
+Environment=HADOOP_HOME=/usr/local/bigdata/hadoop
+Environment=HADOOP_CONF_DIR=/usr/local/bigdata/hadoop/etc/hadoop
+Environment=YARN_CONF_DIR=/usr/local/bigdata/hadoop/etc/hadoop
+Environment=HIVE_SERVER2_THRIFT_PORT=10001
+Environment=HIVE_SERVER2_THRIFT_BIND_HOST=0.0.0.0
+
+ExecStart=/usr/local/bigdata/spark/sbin/start-thriftserver.sh --master yarn --deploy-mode client
+
+ExecStop=/usr/local/bigdata/spark/sbin/stop-thriftserver.sh
+
+Restart=no
+TimeoutStartSec=180
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
 
 
+然后重新加载 systemd 配置：sudo systemctl daemon-reload
+设置开机启动： sudo systemctl enable spark-thriftserver
+sudo systemctl start spark-thriftserver
+启动 Spark ThriftServer：sudo systemctl start spark-thriftserver
+查看服务状态：sudo systemctl status spark-thriftserver
+查看端口：ss -lntp | grep 10001
+查看进程：jps
+正常应该看到：
+HiveThriftServer2 【我的好像叫SparkSubmit】
 
 
 
